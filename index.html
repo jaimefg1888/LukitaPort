@@ -4,18 +4,13 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>LukitaPort — Port Scanner</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-/* ══════════════════════════════════════════
-   LUKITAPORT — GitHub Pages Standalone
-   jaimefg1888
-══════════════════════════════════════════ */
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 a,button{-webkit-tap-highlight-color:transparent}
 
 :root{
-    --bg:#050505; --card:#0f0f0f; --panel:#0a0a0a;
+    --bg:#050505; --card:#0f0f0f;
     --text:#f0f0f0; --muted:#999; --dim:#444;
     --accent:#ff0033; --adim:rgba(255,0,51,.1); --aglow:rgba(255,0,51,.3);
     --border:#222; --bm:#333;
@@ -24,11 +19,7 @@ a,button{-webkit-tap-highlight-color:transparent}
     --yellow:#ffaa00; --ydim:rgba(255,170,0,.08);
     --mono:'Fira Code',monospace;
     --sans:'Inter',sans-serif;
-    --cur:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='22'%3E%3Cpath d='M2 2 L2 18 L6 13 L9 20 L11.5 19 L8.5 12 L14 12 Z' fill='%23ff0033' stroke='%23000' stroke-width='1.2' stroke-linejoin='round'/%3E%3C/svg%3E") 2 2;
 }
-
-*{cursor:var(--cur),default!important}
-input[type="text"],input[type="number"]{cursor:var(--cur),text!important}
 
 html{scrollbar-width:thin;scrollbar-color:#333 #050505}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;min-height:100vh}
@@ -46,8 +37,9 @@ body.en .es{display:none!important}
 @keyframes fadeO{from{opacity:0}to{opacity:1}}
 .legal-popup{background:var(--card);border:1px solid var(--accent);border-radius:4px;max-width:520px;width:100%;padding:32px;box-shadow:0 0 40px rgba(255,0,51,.15);animation:popIn .3s ease}
 @keyframes popIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
-.lpt{font-family:var(--mono);font-size:13px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
+.legal-popup-title{font-family:var(--mono);font-size:13px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
 .legal-popup p{color:var(--muted);font-size:13px;line-height:1.7;margin-bottom:10px}
+.legal-popup p:last-of-type{margin-bottom:0}
 .legal-popup p strong{color:var(--text)}
 .legal-popup-actions{margin-top:24px;display:flex;justify-content:flex-end}
 .btn-accept{padding:10px 28px;background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:12px;letter-spacing:1.5px;text-transform:uppercase;border-radius:4px;transition:all .2s;position:relative;overflow:hidden}
@@ -55,22 +47,12 @@ body.en .es{display:none!important}
 .btn-accept:hover::before{transform:scaleX(1)}
 .btn-accept:hover{color:#fff}
 
-/* ── DEMO BANNER ── */
-.demo-banner{background:rgba(255,170,0,.07);border:1px solid rgba(255,170,0,.2);border-left:3px solid var(--yellow);border-radius:4px;padding:12px 18px;margin-bottom:20px;font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.6}
-.demo-banner strong{color:var(--yellow)}
-.demo-banner a{color:var(--yellow);text-decoration:none}
-.demo-banner a:hover{text-decoration:underline}
-
 /* ── HEADER ── */
-header{position:fixed;top:0;width:100%;z-index:1000;display:flex;align-items:center;justify-content:space-between;padding:14px 5%;background:rgba(5,5,5,.95);backdrop-filter:blur(5px);border-bottom:1px solid var(--border)}
-.logo{font-family:var(--mono);font-size:1.15rem;font-weight:bold;color:var(--text);letter-spacing:.5px}
-.logo span{color:var(--accent)}
-.header-right{display:flex;align-items:center;gap:10px}
+header{position:fixed;top:0;width:100%;z-index:1000;display:flex;align-items:center;justify-content:flex-end;padding:14px 5%;background:rgba(5,5,5,.95);backdrop-filter:blur(5px);border-bottom:1px solid var(--border)}
 .lang-switch{color:var(--muted);font-size:.9rem;display:flex;align-items:center;gap:7px;font-family:var(--mono);border:1px solid var(--bm);padding:7px 14px;border-radius:4px;transition:all .3s;background:transparent}
 .lang-switch:hover{color:var(--accent);border-color:var(--accent);background:var(--adim)}
 .lang-switch.pulse{animation:sp 2s ease-out}
 @keyframes sp{0%,15%{border-color:var(--accent);color:var(--accent);background:var(--adim)}100%{border-color:var(--bm);color:var(--muted);background:transparent}}
-.demo-chip{font-family:var(--mono);font-size:10px;color:var(--yellow);border:1px solid rgba(255,170,0,.3);padding:5px 10px;border-radius:4px;letter-spacing:1px}
 
 /* ── MAIN ── */
 main{max-width:960px;margin:0 auto;padding:100px 5% 60px}
@@ -106,7 +88,6 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;hei
 .btn-scan:hover::before{transform:scaleX(1)}
 .btn-scan:hover{color:#fff;box-shadow:0 0 16px var(--aglow)}
 .btn-scan:disabled{opacity:.35}
-.btn-scan:disabled::before{display:none}
 
 /* ── STATUS ── */
 .status-bar{display:none;flex-direction:column;gap:12px;margin-top:18px;padding:14px 18px;background:#0a0a0a;border:1px solid var(--border);border-radius:4px}
@@ -130,7 +111,7 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;hei
 #results-panel.visible{display:block}
 .results-header-row{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border);gap:10px;flex-wrap:wrap}
 .results-title{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
-.results-title .rdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);flex-shrink:0}
+.rdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);flex-shrink:0}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.15}}
 .dot-blink{animation:blink .9s ease-in-out infinite}
 .export-btns{display:flex;gap:8px;flex-wrap:wrap}
@@ -168,21 +149,34 @@ tbody td{padding:10px 20px;font-family:var(--mono);font-size:12px;white-space:no
 .empty-state{text-align:center;padding:48px 24px;color:var(--dim);font-family:var(--mono);font-size:12px;line-height:2}
 
 /* ── HISTORIAL ── */
-.history-item{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid rgba(34,34,34,.5);font-family:var(--mono);font-size:12px;transition:background .1s}
+.history-item{border-bottom:1px solid rgba(34,34,34,.5);font-family:var(--mono);font-size:12px}
 .history-item:last-child{border-bottom:none}
-.history-item:hover{background:#111}
+.history-row{display:flex;align-items:center;justify-content:space-between;padding:11px 20px;transition:background .1s}
+.history-row:hover{background:#111}
 .history-target{color:var(--accent)}
 .history-meta{color:var(--dim);font-size:11px;margin-left:8px}
 .history-open{color:var(--green);font-size:11px;margin-left:12px}
-.btn-reload{padding:3px 10px;background:transparent;border:1px solid var(--bm);border-radius:3px;color:var(--muted);font-family:var(--mono);font-size:10px;transition:all .15s}
+.history-actions{display:flex;align-items:center;gap:8px}
+.btn-reload,.btn-expand{padding:3px 10px;background:transparent;border:1px solid var(--bm);border-radius:3px;color:var(--muted);font-family:var(--mono);font-size:10px;transition:all .15s}
 .btn-reload:hover{border-color:var(--accent);color:var(--accent)}
+.btn-expand:hover{border-color:#555;color:var(--text)}
+.btn-expand.active{border-color:var(--accent);color:var(--accent);background:var(--adim)}
+.history-detail{max-height:0;overflow:hidden;transition:max-height .35s ease-out;background:#080808;border-top:1px solid rgba(34,34,34,.4)}
+.history-detail.open{max-height:500px;transition:max-height .4s ease-in}
+.history-detail-inner{padding:14px 20px}
+.hd-meta{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px}
+.hd-meta span{font-size:11px;color:var(--dim)}
+.hd-meta strong{color:var(--muted)}
+.hd-label{font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+.hd-ports{display:flex;flex-wrap:wrap;gap:6px}
+.hd-port-tag{padding:3px 10px;border-radius:3px;font-size:11px;background:var(--gdim);color:var(--green);border:1px solid rgba(0,255,136,.15)}
+.hd-empty{color:var(--dim);font-size:11px;padding:4px 0}
 
 /* ── FOOTER ── */
 footer{text-align:center;padding:20px;border-top:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--dim);line-height:1.8}
 footer a{color:var(--dim);text-decoration:none}
 footer a:hover{color:var(--accent)}
 
-/* ── RESPONSIVE ── */
 @media(max-width:680px){.form-grid{grid-template-columns:1fr}.summary-grid{grid-template-columns:repeat(2,1fr)}.page-title h1{font-size:1.6rem}main{padding:90px 4% 50px}}
     </style>
 </head>
@@ -191,7 +185,10 @@ footer a:hover{color:var(--accent)}
 <!-- POPUP LEGAL -->
 <div id="legal-overlay">
     <div class="legal-popup">
-        <div class="lpt"><span class="es">⚠ AVISO LEGAL</span><span class="en">⚠ LEGAL NOTICE</span></div>
+        <div class="legal-popup-title">
+            <span class="es">⚠ AVISO LEGAL</span>
+            <span class="en">⚠ LEGAL NOTICE</span>
+        </div>
         <p class="es">Esta herramienta está diseñada <strong>exclusivamente para uso educativo</strong> y para el análisis de redes y sistemas sobre los que tienes <strong>autorización expresa</strong>.</p>
         <p class="en">This tool is designed <strong>exclusively for educational use</strong> and for the analysis of networks and systems you have <strong>explicit authorization</strong> to scan.</p>
         <p class="es">El escaneo de sistemas ajenos sin permiso puede constituir un <strong>delito penal</strong> en tu jurisdicción. El autor no se responsabiliza del uso indebido de este software.</p>
@@ -202,13 +199,9 @@ footer a:hover{color:var(--accent)}
     </div>
 </div>
 
-<!-- HEADER -->
+<!-- HEADER — solo botón idioma -->
 <header>
-    <div class="logo">Lukita<span>Port</span></div>
-    <div class="header-right">
-        <span class="demo-chip">DEMO</span>
-        <button class="lang-switch" id="lang-btn">🌐 <span id="lang-label">EN</span></button>
-    </div>
+    <button class="lang-switch" id="lang-btn">🌐 <span id="lang-label">EN</span></button>
 </header>
 
 <main>
@@ -216,13 +209,6 @@ footer a:hover{color:var(--accent)}
         <h1>Lukita<span>Port</span></h1>
         <p class="es">ESCÁNER DE PUERTOS · USO EDUCATIVO</p>
         <p class="en">PORT SCANNER · EDUCATIONAL USE ONLY</p>
-    </div>
-
-    <!-- Demo banner -->
-    <div class="demo-banner">
-        <strong class="es">Modo demo</strong><strong class="en">Demo mode</strong>
-        <span class="es"> — Esta versión simula escaneos para visualización. Para escaneos reales, ejecuta el backend Python localmente: <a href="https://github.com/jaimefg1888/LukitaPort" target="_blank">github.com/jaimefg1888/LukitaPort</a></span>
-        <span class="en"> — This version simulates scans for visualization. For real scans, run the Python backend locally: <a href="https://github.com/jaimefg1888/LukitaPort" target="_blank">github.com/jaimefg1888/LukitaPort</a></span>
     </div>
 
     <!-- Configuración -->
@@ -261,8 +247,8 @@ footer a:hover{color:var(--accent)}
                 </div>
             </div>
             <button class="btn-scan" id="btn-scan">
-                <span class="es">Iniciar Escaneo (Demo)</span>
-                <span class="en">Start Scan (Demo)</span>
+                <span class="es">Iniciar Escaneo</span>
+                <span class="en">Start Scan</span>
             </button>
             <div class="status-bar" id="status-bar">
                 <div class="status-info">
@@ -339,53 +325,97 @@ footer a:hover{color:var(--accent)}
 </footer>
 
 <script>
-// ── Datos de simulación realista ──
-const PORT_RISK = {21:'high',23:'high',25:'high',110:'high',139:'high',445:'high',1433:'high',1521:'high',3306:'high',3389:'high',5432:'high',5900:'high',6379:'high',27017:'high',22:'medium',53:'medium',111:'medium',135:'medium',143:'medium',8080:'medium',8888:'medium',9200:'medium',80:'low',443:'low',465:'low',587:'low',993:'low',995:'low',8443:'low'};
-const RISK_LABELS = {es:{high:'Alto riesgo',medium:'Riesgo medio',low:'Bajo riesgo',info:'Sin datos'},en:{high:'High risk',medium:'Medium risk',low:'Low risk',info:'No data'}};
-const SERVICE_MAP = {21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',53:'DNS',80:'HTTP',110:'POP3',111:'RPC',135:'MSRPC',139:'NetBIOS',143:'IMAP',443:'HTTPS',445:'SMB',465:'SMTPS',587:'SMTP/TLS',993:'IMAPS',995:'POP3S',1433:'MSSQL',1521:'Oracle DB',1723:'PPTP',3306:'MySQL',3389:'RDP',5432:'PostgreSQL',5900:'VNC',6379:'Redis',8080:'HTTP-Alt',8443:'HTTPS-Alt',8888:'HTTP-Dev',9200:'Elasticsearch',27017:'MongoDB'};
-const COMMON_PORTS = [21,22,23,25,53,80,110,111,135,139,143,443,445,465,587,993,995,1433,1521,1723,3306,3389,5432,5900,6379,8080,8443,8888,9200,27017];
+const PORT_RISK={21:'high',23:'high',25:'high',110:'high',139:'high',445:'high',1433:'high',1521:'high',3306:'high',3389:'high',5432:'high',5900:'high',6379:'high',27017:'high',22:'medium',53:'medium',111:'medium',135:'medium',143:'medium',8080:'medium',8888:'medium',9200:'medium',80:'low',443:'low',465:'low',587:'low',993:'low',995:'low',8443:'low'};
+const RISK_LABELS={es:{high:'Alto riesgo',medium:'Riesgo medio',low:'Bajo riesgo',info:'Sin datos'},en:{high:'High risk',medium:'Medium risk',low:'Low risk',info:'No data'}};
+const getRisk=p=>PORT_RISK[p]||'info';
 
-// Simula qué puertos estarían abiertos (aleatorio pero con lógica)
-function simulateScan(target, mode, pStart, pEnd) {
-    let ports = mode==='quick' ? [...COMMON_PORTS] : mode==='full' ? Array.from({length:1000},(_,i)=>i+1) : Array.from({length:pEnd-pStart+1},(_,i)=>i+pStart);
-    // ~30% de puertos comunes "abiertos", cerrados el resto, alguno filtrado
-    return ports.map(port => {
-        const isCommon = COMMON_PORTS.includes(port);
-        const rand = Math.random();
-        let state;
-        if (isCommon && rand < 0.35) state = 'open';
-        else if (rand > 0.97) state = 'filtered';
-        else state = 'closed';
-        return { port, state, service: SERVICE_MAP[port]||'Unknown', response_time_ms: state==='open' ? Math.floor(Math.random()*200)+20 : state==='closed' ? Math.floor(Math.random()*300)+900 : null, progress:0, scanned:0, total:ports.length, type:'port' };
-    });
-}
-
-const state = {results:[],scanMeta:null,scanning:false,filter:'all',counts:{open:0,closed:0,filtered:0},lang:'es',timer:null};
-const $ = id => document.getElementById(id);
+const state={results:[],scanMeta:null,scanning:false,filter:'all',counts:{open:0,closed:0,filtered:0},eventSource:null,lang:'es'};
+const $=id=>document.getElementById(id);
 
 // Popup
 const overlay=$('legal-overlay');
-if(localStorage.getItem('lukita_legal_ok')==='1') overlay.classList.add('hidden');
+if(localStorage.getItem('lukita_legal_ok')==='1')overlay.classList.add('hidden');
 $('btn-accept').addEventListener('click',()=>{overlay.classList.add('hidden');localStorage.setItem('lukita_legal_ok','1');});
 
 // Idioma
 function applyLang(lang){
-    state.lang=lang; document.body.className=lang; $('lang-label').textContent=lang==='es'?'EN':'ES';
+    state.lang=lang;document.body.className=lang;$('lang-label').textContent=lang==='es'?'EN':'ES';
     Array.from($('scan-mode').options).forEach(o=>{o.textContent=o.dataset[lang];});
-    if(state.results.length) renderTable();
+    if(state.results.length)renderTable();
     renderHistory();
 }
 $('lang-btn').addEventListener('click',()=>{
     applyLang(state.lang==='es'?'en':'es');
-    $('lang-btn').classList.remove('pulse'); void $('lang-btn').offsetWidth; $('lang-btn').classList.add('pulse');
+    $('lang-btn').classList.remove('pulse');void $('lang-btn').offsetWidth;$('lang-btn').classList.add('pulse');
     $('lang-btn').addEventListener('animationend',()=>$('lang-btn').classList.remove('pulse'),{once:true});
 });
 
 // Limpiar URL
-function cleanTarget(raw){let t=raw.trim().replace(/^https?:\/\//i,'').split('/')[0].split('?')[0];const isIP=/^\d{1,3}(\.\d{1,3}){3}$/.test(t.split(':')[0]);if(!isIP)t=t.split(':')[0];return t.trim();}
+function cleanTarget(raw){
+    let t=raw.trim().replace(/^https?:\/\//i,'').split('/')[0].split('?')[0].split('#')[0];
+    const isIP=/^\d{1,3}(\.\d{1,3}){3}$/.test(t.split(':')[0]);
+    if(!isIP)t=t.split(':')[0];
+    return t.trim();
+}
 $('target').addEventListener('input',function(){this.style.borderColor=/^https?:\/\//i.test(this.value)?'#ffaa00':'';});
 
-// Form events
+// Historial
+const HIST_KEY='lukita_history';
+const loadHistory=()=>{try{return JSON.parse(localStorage.getItem(HIST_KEY))||[];}catch{return[];}};
+function saveHistory(e){
+    let h=loadHistory();
+    if(h.length&&h[0].target===e.target){h[0]=e;}else{h.unshift(e);if(h.length>5)h=h.slice(0,5);}
+    localStorage.setItem(HIST_KEY,JSON.stringify(h));
+}
+function renderHistory(){
+    const h=loadHistory();const panel=$('history-panel');const list=$('history-list');
+    if(!h.length){panel.style.display='none';return;}
+    panel.style.display='block';
+    list.innerHTML=h.map((item,idx)=>{
+        const openPorts=item.openPorts||[];
+        const riskHigh=item.riskHigh||0;const riskMed=item.riskMed||0;
+        const tagsHtml=openPorts.length
+            ?openPorts.map(p=>'<span class="hd-port-tag">'+p.port+' <span style="opacity:.6;font-size:10px">'+p.service+'</span></span>').join('')
+            :'<span class="hd-empty">'+(state.lang==='es'?'Sin puertos abiertos':'No open ports')+'</span>';
+        const riskLine=riskHigh?'<span style="color:#ff0033">⬤ '+riskHigh+' '+(state.lang==='es'?'alto riesgo':'high risk')+'</span>':'';
+        const medLine=riskMed?'<span style="color:#ffaa00">⬤ '+riskMed+' '+(state.lang==='es'?'medio riesgo':'medium risk')+'</span>':'';
+        return`<div class="history-item" id="hi-${idx}">
+            <div class="history-row">
+                <div><span class="history-target">${item.target}</span><span class="history-meta">— ${item.date}</span></div>
+                <div class="history-actions">
+                    <span class="history-open">● ${item.open} <span class="es">abiertos</span><span class="en">open</span></span>
+                    <button class="btn-expand" data-idx="${idx}">⊞ <span class="es">Ver</span><span class="en">View</span></button>
+                    <button class="btn-reload" data-idx="${idx}">↺ <span class="es">Relanzar</span><span class="en">Retry</span></button>
+                </div>
+            </div>
+            <div class="history-detail" id="hd-${idx}">
+                <div class="history-detail-inner">
+                    <div class="hd-meta">
+                        <span><strong>IP:</strong> ${item.ip||'—'}</span>
+                        <span><strong>${state.lang==='es'?'Modo':'Mode'}:</strong> ${item.mode||'—'}</span>
+                        <span><strong>${state.lang==='es'?'Escaneados':'Scanned'}:</strong> ${item.total||'?'}</span>
+                        ${riskLine}${medLine}
+                    </div>
+                    <div class="hd-label">${state.lang==='es'?'Puertos abiertos':'Open ports'}</div>
+                    <div class="hd-ports">${tagsHtml}</div>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+    list.querySelectorAll('.btn-expand').forEach(btn=>{
+        btn.addEventListener('click',()=>{
+            const detail=$('hd-'+btn.dataset.idx);const isOpen=detail.classList.contains('open');
+            list.querySelectorAll('.history-detail').forEach(d=>d.classList.remove('open'));
+            list.querySelectorAll('.btn-expand').forEach(b=>b.classList.remove('active'));
+            if(!isOpen){detail.classList.add('open');btn.classList.add('active');}
+        });
+    });
+    list.querySelectorAll('.btn-reload').forEach(btn=>{
+        btn.addEventListener('click',()=>{$('target').value=loadHistory()[+btn.dataset.idx].target;startScan();});
+    });
+}
+
+// Form
 $('scan-mode').addEventListener('change',()=>{$('custom-range').classList.toggle('visible',$('scan-mode').value==='custom');});
 $('timeout').addEventListener('input',()=>{$('timeout-val').textContent=parseFloat($('timeout').value).toFixed(1)+'s';});
 document.querySelectorAll('.filter-tab').forEach(tab=>{
@@ -397,90 +427,72 @@ $('btn-html').addEventListener('click',exportHTMLReport);
 $('target').addEventListener('keydown',e=>{if(e.key==='Enter'&&!state.scanning)startScan();});
 $('btn-scan').addEventListener('click',()=>{state.scanning?stopScan():startScan();});
 
-// Dot parpadeo
-function setDotBlink(on){const d=$('results-dot');on?d.classList.add('dot-blink'):d.classList.remove('dot-blink');}
-
-// Historial
-const HIST_KEY='lukita_history';
-const loadHistory=()=>{try{return JSON.parse(localStorage.getItem(HIST_KEY))||[];}catch{return[];}};
-function saveHistory(e){let h=loadHistory();if(h.length&&h[0].target===e.target)return;h.unshift(e);if(h.length>5)h=h.slice(0,5);localStorage.setItem(HIST_KEY,JSON.stringify(h));}
-function renderHistory(){
-    const h=loadHistory(); const panel=$('history-panel'); const list=$('history-list');
-    if(!h.length){panel.style.display='none';return;}
-    panel.style.display='block';
-    list.innerHTML=h.map((item,idx)=>`<div class="history-item"><div><span class="history-target">${item.target}</span><span class="history-meta">— ${item.date}</span></div><div style="display:flex;align-items:center;gap:10px"><span class="history-open">● ${item.open} <span class="es">abiertos</span><span class="en">open</span></span><button class="btn-reload" data-idx="${idx}">↺ <span class="es">Relanzar</span><span class="en">Retry</span></button></div></div>`).join('');
-    list.querySelectorAll('.btn-reload').forEach(btn=>{btn.addEventListener('click',()=>{$('target').value=loadHistory()[+btn.dataset.idx].target;startScan();});});
-}
+function setDotBlink(on){on?$('results-dot').classList.add('dot-blink'):$('results-dot').classList.remove('dot-blink');}
 
 function startScan(){
     const target=cleanTarget($('target').value);
     if(!target){$('target').focus();return;}
-    $('target').value=target; $('target').style.borderColor='';
-
-    state.results=[]; state.counts={open:0,closed:0,filtered:0}; state.scanMeta=null; state.scanning=true;
-    if(state.timer) clearInterval(state.timer);
-
+    $('target').value=target;$('target').style.borderColor='';
+    state.results=[];state.counts={open:0,closed:0,filtered:0};state.scanMeta=null;state.scanning=true;
     $('btn-scan').querySelector('.es').textContent='Detener';
     $('btn-scan').querySelector('.en').textContent='Stop';
-    $('btn-scan').style.borderColor='#ff4444'; $('btn-scan').style.color='#ff4444';
-
+    $('btn-scan').style.borderColor='#ff4444';$('btn-scan').style.color='#ff4444';
     $('results-body').innerHTML='';
     $('status-bar').classList.add('visible');
     $('results-panel').classList.add('visible');
     $('summary-panel').style.display='none';
-    setDotBlink(true); updateSummary();
+    setDotBlink(true);updateSummary();
 
-    const mode=$('scan-mode').value;
-    const pStart=+$('port-start').value;
-    const pEnd=+$('port-end').value;
-    const fakeIP=`${Math.floor(Math.random()*200)+10}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*255)}.${Math.floor(Math.random()*254)+1}`;
-
-    state.scanMeta={ip:fakeIP,hostname:target,input:target,mode,total_ports:0,resolved:true};
-    $('status-target').textContent=target+' ('+fakeIP+')';
-
-    const simResults=simulateScan(target,mode,pStart,pEnd);
-    const total=simResults.length;
-    state.scanMeta.total_ports=total;
-    $('st-total').textContent=total;
-
-    let idx=0;
-    const delay=Math.max(40,Math.min(200,30000/total));
-
-    state.timer=setInterval(()=>{
-        if(idx>=simResults.length||!state.scanning){stopScan(true);return;}
-        const d={...simResults[idx],scanned:idx+1,progress:((idx+1)/total)*100};
-        idx++;
-        state.results.push(d); state.counts[d.state]++;
-        $('st-scanned').textContent=d.scanned; $('st-open').textContent=state.counts.open;
-        $('progress-fill').style.width=d.progress+'%';
-        if(state.filter==='all'||state.filter===d.state) appendRow(d);
-        updateSummary();
-    },delay);
+    const params=new URLSearchParams({target,mode:$('scan-mode').value,port_start:$('port-start').value,port_end:$('port-end').value,timeout:$('timeout').value});
+    if(state.eventSource)state.eventSource.close();
+    state.eventSource=new EventSource('/api/scan?'+params);
+    state.eventSource.onmessage=e=>{
+        const d=JSON.parse(e.data);
+        if(d.error){showError(d.error);stopScan();return;}
+        if(d.type==='meta'){
+            state.scanMeta=d;
+            $('status-target').textContent=(d.hostname&&d.hostname!==d.ip)?d.hostname+' ('+d.ip+')':d.ip;
+            $('st-total').textContent=d.total_ports;return;
+        }
+        if(d.type==='port'){
+            state.results.push(d);state.counts[d.state]++;
+            $('st-scanned').textContent=d.scanned;$('st-open').textContent=state.counts.open;
+            $('progress-fill').style.width=d.progress+'%';
+            if(state.filter==='all'||state.filter===d.state)appendRow(d);
+            updateSummary();return;
+        }
+        if(d.type==='done')stopScan(true);
+    };
+    state.eventSource.onerror=()=>{if(state.scanning)stopScan();};
 }
 
 function stopScan(completed=false){
     state.scanning=false;
-    if(state.timer){clearInterval(state.timer);state.timer=null;}
-    $('btn-scan').querySelector('.es').textContent='Iniciar Escaneo (Demo)';
-    $('btn-scan').querySelector('.en').textContent='Start Scan (Demo)';
-    $('btn-scan').style.borderColor=''; $('btn-scan').style.color='';
+    if(state.eventSource){state.eventSource.close();state.eventSource=null;}
+    $('btn-scan').querySelector('.es').textContent='Iniciar Escaneo';
+    $('btn-scan').querySelector('.en').textContent='Start Scan';
+    $('btn-scan').style.borderColor='';$('btn-scan').style.color='';
     setDotBlink(false);
     if(completed){
         $('progress-fill').style.width='100%';
         $('summary-panel').style.display='block';
-        if(state.scanMeta){saveHistory({target:state.scanMeta.input||state.scanMeta.ip,open:state.counts.open,date:new Date().toLocaleString()});renderHistory();}
+        if(state.scanMeta){
+            const openPorts=state.results.filter(r=>r.state==='open').map(r=>({port:r.port,service:r.service}));
+            saveHistory({target:state.scanMeta.input||state.scanMeta.ip,ip:state.scanMeta.ip,mode:state.scanMeta.mode,open:state.counts.open,total:state.results.length,riskHigh:openPorts.filter(p=>getRisk(p.port)==='high').length,riskMed:openPorts.filter(p=>getRisk(p.port)==='medium').length,openPorts,date:new Date().toLocaleString()});
+            renderHistory();
+        }
     }
     if(!state.results.length){const msg=state.lang==='es'?'Sin resultados':'No results found';$('results-body').innerHTML='<tr><td colspan="5"><div class="empty-state">[ _ ]<br>'+msg+'</div></td></tr>';}
 }
 
 function appendRow(d){
-    const tr=document.createElement('tr'); tr.dataset.state=d.state;
-    const risk=getRisk(d.port); const rl=RISK_LABELS[state.lang][risk];
+    const tr=document.createElement('tr');tr.dataset.state=d.state;
+    const risk=getRisk(d.port);const rl=RISK_LABELS[state.lang][risk];
     const riskCell=d.state==='open'?'<span class="risk risk-'+risk+'">'+rl+'</span>':'<span style="color:#333">—</span>';
-    tr.innerHTML='<td class="port-num">'+d.port+'</td><td><span class="badge badge-'+d.state+'">'+translateState(d.state)+'</span></td><td class="service-name">'+d.service+'</td><td>'+riskCell+'</td><td class="resp-time '+getRespClass(d.response_time_ms)+'">'+((d.response_time_ms!==null)?d.response_time_ms+' ms':'—')+'</td>';
+    tr.innerHTML='<td class="port-num">'+d.port+'</td><td><span class="badge badge-'+d.state+'">'+translateState(d.state)+'</span></td><td class="service-name">'+d.service+'</td><td>'+riskCell+'</td><td class="resp-time '+getRespClass(d.response_time_ms)+'">'+(d.response_time_ms!==null?d.response_time_ms+' ms':'—')+'</td>';
     $('results-body').appendChild(tr);
     const w=$('results-body').closest('.table-wrap');
-    if(w.scrollTop+w.clientHeight>=w.scrollHeight-80) w.scrollTop=w.scrollHeight;
+    if(w.scrollTop+w.clientHeight>=w.scrollHeight-80)w.scrollTop=w.scrollHeight;
 }
 
 function renderTable(){
@@ -491,34 +503,34 @@ function renderTable(){
 }
 
 function updateSummary(){$('sum-open').textContent=state.counts.open;$('sum-closed').textContent=state.counts.closed;$('sum-filtered').textContent=state.counts.filtered;$('sum-total').textContent=state.results.length;}
-function getRisk(p){return PORT_RISK[p]||'info';}
 function translateState(s){return(state.lang==='en'?{open:'Open',closed:'Closed',filtered:'Filtered'}:{open:'Abierto',closed:'Cerrado',filtered:'Filtrado'})[s]||s;}
 function getRespClass(ms){if(ms===null)return'';if(ms<100)return'fast';if(ms<500)return'medium';return'slow';}
+function showError(msg){$('results-body').innerHTML='<tr><td colspan="5"><div class="empty-state" style="color:#ff0033">✕<br>'+msg+'</div></td></tr>';}
 function getTs(){return new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);}
-function getSlug(){return(state.scanMeta?.ip??'demo').replace(/\./g,'_');}
+function getSlug(){return(state.scanMeta?.ip??'scan').replace(/\./g,'_');}
 
 function exportJSON(){
     if(!state.results.length)return;
-    const p={meta:{tool:'LukitaPort v1.0.0',mode:'DEMO',author:'jaimefg1888',generated_at:new Date().toISOString(),target:state.scanMeta,summary:{...state.counts,total:state.results.length}},results:state.results.map(r=>({...r,risk:getRisk(r.port)}))};
-    dl(JSON.stringify(p,null,2),'lukitaport_demo_'+getTs()+'.json','application/json');
+    const p={meta:{tool:'LukitaPort v1.0.0',author:'jaimefg1888',generated_at:new Date().toISOString(),target:state.scanMeta,summary:{...state.counts,total:state.results.length}},results:state.results.map(r=>({...r,risk:getRisk(r.port)}))};
+    dl(JSON.stringify(p,null,2),'lukitaport_'+getSlug()+'_'+getTs()+'.json','application/json');
 }
 function exportCSV(){
     if(!state.results.length)return;
     const rows=[['Port','State','Service','Risk','Response_ms']];
     state.results.forEach(r=>rows.push([r.port,r.state,r.service,getRisk(r.port),r.response_time_ms??'']));
-    dl(rows.map(r=>r.join(',')).join('\r\n'),'lukitaport_demo_'+getTs()+'.csv','text/csv');
+    dl(rows.map(r=>r.join(',')).join('\r\n'),'lukitaport_'+getSlug()+'_'+getTs()+'.csv','text/csv');
 }
 function exportHTMLReport(){
     if(!state.results.length)return;
-    const meta=state.scanMeta||{}; const ts=new Date().toLocaleString();
+    const meta=state.scanMeta||{};const ts=new Date().toLocaleString();
     const openP=state.results.filter(r=>r.state==='open');
     const highN=openP.filter(r=>getRisk(r.port)==='high').length;
     const medN=openP.filter(r=>getRisk(r.port)==='medium').length;
     const rc={high:'#ff0033',medium:'#ffaa00',low:'#00ff88',info:'#444'};
     const rl2={high:'HIGH',medium:'MEDIUM',low:'LOW',info:'—'};
     const rows=state.results.map(r=>{const sc=r.state==='open'?'#00ff88':r.state==='filtered'?'#ffaa00':'#ff4444';const rk=getRisk(r.port);return'<tr><td>'+r.port+'</td><td style="color:'+sc+'">● '+r.state.charAt(0).toUpperCase()+r.state.slice(1)+'</td><td>'+r.service+'</td><td style="color:'+rc[rk]+';font-size:10px">'+rl2[rk]+'</td><td>'+(r.response_time_ms??'—')+' ms</td></tr>';}).join('');
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>LukitaPort Demo Report</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#050505;color:#f0f0f0;font-family:'Fira Code',monospace;font-size:13px;padding:40px;line-height:1.6}h1{font-size:1.8rem;color:#ff0033;margin-bottom:4px}.sub{color:#555;font-size:11px;letter-spacing:1px;margin-bottom:28px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#1a1a1a;margin-bottom:28px;border-radius:4px;overflow:hidden}.card{background:#0d0d0d;padding:18px;text-align:center}.card .n{font-size:2rem;font-weight:bold;line-height:1;margin-bottom:4px}.card .l{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#333}.rs{display:flex;gap:10px;margin-bottom:24px}.rsi{padding:8px 14px;border-radius:4px;font-size:11px}.rsh{background:rgba(255,0,51,.1);border:1px solid rgba(255,0,51,.2);color:#ff0033}.rsm{background:rgba(255,170,0,.1);border:1px solid rgba(255,170,0,.2);color:#ffaa00}h2{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#444;margin:24px 0 10px;border-bottom:1px solid #111;padding-bottom:8px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 14px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#333;border-bottom:1px solid #111;font-weight:normal}td{padding:9px 14px;border-bottom:1px solid rgba(20,20,20,.9)}.mrow td:first-child{color:#444;width:160px}footer{margin-top:40px;color:#333;font-size:11px;text-align:center;border-top:1px solid #111;padding-top:18px}</style></head><body><h1>LukitaPort</h1><div class="sub">PORT SCAN REPORT (DEMO) · ${ts}</div><div class="grid"><div class="card"><div class="n" style="color:#00ff88">${state.counts.open}</div><div class="l">Open</div></div><div class="card"><div class="n" style="color:#ff4444">${state.counts.closed}</div><div class="l">Closed</div></div><div class="card"><div class="n" style="color:#ffaa00">${state.counts.filtered}</div><div class="l">Filtered</div></div><div class="card"><div class="n" style="color:#ff0033">${state.results.length}</div><div class="l">Total</div></div></div><div class="rs"><div class="rsi rsh">⬤ HIGH RISK: <strong>${highN}</strong></div><div class="rsi rsm">⬤ MEDIUM RISK: <strong>${medN}</strong></div></div><h2>Metadata</h2><table><tr class="mrow"><td>Target</td><td>${meta.input??'—'}</td></tr><tr class="mrow"><td>Simulated IP</td><td>${meta.ip??'—'}</td></tr><tr class="mrow"><td>Mode</td><td>${meta.mode??'—'} (DEMO)</td></tr><tr class="mrow"><td>Generated</td><td>${ts}</td></tr></table><h2>All Results</h2><table><thead><tr><th>Port</th><th>State</th><th>Service</th><th>Risk</th><th>Response</th></tr></thead><tbody>${rows}</tbody></table><footer>LukitaPort v1.0.0 · jaimefg1888 · Demo mode — For educational use only</footer></body></html>`;
-    dl(html,'lukitaport_demo_report_'+getTs()+'.html','text/html');
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>LukitaPort Report</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#050505;color:#f0f0f0;font-family:'Fira Code',monospace;font-size:13px;padding:40px;line-height:1.6}h1{font-size:1.8rem;color:#ff0033;margin-bottom:4px}.sub{color:#555;font-size:11px;letter-spacing:1px;margin-bottom:28px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#1a1a1a;margin-bottom:28px;border-radius:4px;overflow:hidden}.card{background:#0d0d0d;padding:18px;text-align:center}.card .n{font-size:2rem;font-weight:bold;line-height:1;margin-bottom:4px}.card .l{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#333}.rs{display:flex;gap:10px;margin-bottom:24px}.rsi{padding:8px 14px;border-radius:4px;font-size:11px}.rsh{background:rgba(255,0,51,.1);border:1px solid rgba(255,0,51,.2);color:#ff0033}.rsm{background:rgba(255,170,0,.1);border:1px solid rgba(255,170,0,.2);color:#ffaa00}h2{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#444;margin:24px 0 10px;border-bottom:1px solid #111;padding-bottom:8px}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px 14px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#333;border-bottom:1px solid #111;font-weight:normal}td{padding:9px 14px;border-bottom:1px solid rgba(20,20,20,.9)}.mrow td:first-child{color:#444;width:160px}footer{margin-top:40px;color:#333;font-size:11px;text-align:center;border-top:1px solid #111;padding-top:18px}</style></head><body><h1>LukitaPort</h1><div class="sub">PORT SCAN REPORT · ${ts}</div><div class="grid"><div class="card"><div class="n" style="color:#00ff88">${state.counts.open}</div><div class="l">Open</div></div><div class="card"><div class="n" style="color:#ff4444">${state.counts.closed}</div><div class="l">Closed</div></div><div class="card"><div class="n" style="color:#ffaa00">${state.counts.filtered}</div><div class="l">Filtered</div></div><div class="card"><div class="n" style="color:#ff0033">${state.results.length}</div><div class="l">Total</div></div></div><div class="rs"><div class="rsi rsh">⬤ HIGH RISK: <strong>${highN}</strong></div><div class="rsi rsm">⬤ MEDIUM RISK: <strong>${medN}</strong></div></div><h2>Scan Metadata</h2><table><tr class="mrow"><td>Target</td><td>${meta.input??'—'}</td></tr><tr class="mrow"><td>Resolved IP</td><td>${meta.ip??'—'}</td></tr><tr class="mrow"><td>Hostname</td><td>${meta.hostname??'—'}</td></tr><tr class="mrow"><td>Mode</td><td>${meta.mode??'—'}</td></tr><tr class="mrow"><td>Ports scanned</td><td>${meta.total_ports??state.results.length}</td></tr><tr class="mrow"><td>Generated</td><td>${ts}</td></tr></table><h2>All Results</h2><table><thead><tr><th>Port</th><th>State</th><th>Service</th><th>Risk</th><th>Response</th></tr></thead><tbody>${rows}</tbody></table><footer>LukitaPort v1.0.0 · jaimefg1888 · For educational use only</footer></body></html>`;
+    dl(html,'lukitaport_report_'+getSlug()+'_'+getTs()+'.html','text/html');
 }
 function dl(content,name,type){const b=new Blob([content],{type});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
 
