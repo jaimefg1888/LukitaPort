@@ -360,12 +360,11 @@ function cleanTarget(raw){
 $('target').addEventListener('input',function(){this.style.borderColor=/^https?:\/\//i.test(this.value)?'#ffaa00':'';});
 
 // Historial
-const HIST_KEY='lukita_history';
-const loadHistory=()=>{try{return JSON.parse(localStorage.getItem(HIST_KEY))||[];}catch{return[];}};
+// Historial solo en memoria — se resetea con cada sesión
+let _sessionHistory=[];
+const loadHistory=()=>_sessionHistory;
 function saveHistory(e){
-    let h=loadHistory();
-    if(h.length&&h[0].target===e.target){h[0]=e;}else{h.unshift(e);if(h.length>5)h=h.slice(0,5);}
-    localStorage.setItem(HIST_KEY,JSON.stringify(h));
+    if(_sessionHistory.length&&_sessionHistory[0].target===e.target){_sessionHistory[0]=e;}else{_sessionHistory.unshift(e);if(_sessionHistory.length>5)_sessionHistory=_sessionHistory.slice(0,5);}
 }
 function renderHistory(){
     const h=loadHistory();const panel=$('history-panel');const list=$('history-list');
