@@ -446,12 +446,14 @@ function startScan(){
     const params=new URLSearchParams({target,mode:$('scan-mode').value,port_start:$('port-start').value,port_end:$('port-end').value,timeout:$('timeout').value});
     if(state.eventSource)state.eventSource.close();
 
-    // Intentar backend real; si falla, arrancar simulación
-    let backendOk=false;
-    state.eventSource=new EventSource('/api/scan?'+params);
-    state.eventSource.onmessage=e=>{
-        backendOk=true;
-        const d=JSON.parse(e.data);
+    // Intentar backend real en localhost:8000, si falla usar simulación
+    const API_BASE = 'http://localhost:8000';
+    let backendOk = false;
+    state.eventSource = new EventSource(API_BASE + '/api/scan?' + params);
+
+    state.eventSource.onmessage = e => {
+        backendOk = true;
+        const d = JSON.parse(e.data);
         if(d.error){showError(d.error);stopScan();return;}
         if(d.type==='meta'){
             state.scanMeta=d;
@@ -467,24 +469,28 @@ function startScan(){
         }
         if(d.type==='done')stopScan(true);
     };
-    state.eventSource.onerror=()=>{
-        if(!backendOk&&state.scanning){state.eventSource.close();state.eventSource=null;runSimulation(target);}
-        else if(state.scanning){stopScan();}
+    state.eventSource.onerror = () => {
+        if(!backendOk && state.scanning){
+            state.eventSource.close(); state.eventSource = null;
+            runSimulation(target);
+        } else if(state.scanning){
+            stopScan();
+        }
     };
 }
 
 // ── Simulación sin backend ──
-const SERVICES={21:'ftp',22:'ssh',23:'telnet',25:'smtp',53:'dns',80:'http',110:'pop3',111:'rpcbind',135:'msrpc',139:'netbios',143:'imap',443:'https',445:'smb',465:'smtps',587:'submission',993:'imaps',995:'pop3s',1433:'mssql',1521:'oracle',3306:'mysql',3389:'rdp',5432:'postgres',5900:'vnc',6379:'redis',8080:'http-alt',8443:'https-alt',8888:'jupyter',9200:'elasticsearch',27017:'mongodb'};
-const COMMON_PORTS=[21,22,23,25,53,80,110,111,135,139,143,443,445,465,587,993,995,1433,1521,3306,3389,5432,5900,6379,8080,8443,8888,9200,27017];
+const SERVICES={21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',53:'DNS',80:'HTTP',110:'POP3',111:'RPC',135:'MSRPC',139:'NetBIOS',143:'IMAP',443:'HTTPS',445:'SMB',465:'SMTPS',587:'SMTP/TLS',993:'IMAPS',995:'POP3S',1433:'MSSQL',1521:'Oracle DB',3306:'MySQL',3389:'RDP',5432:'PostgreSQL',5900:'VNC',6379:'Redis',8080:'HTTP-Alt',8443:'HTTPS-Alt',8888:'HTTP-Dev',9200:'Elasticsearch',27017:'MongoDB'};
+const COMMON_PORTS_SIM=[21,22,23,25,53,80,110,111,135,139,143,443,445,465,587,993,995,1433,1521,1723,3306,3389,5432,5900,6379,8080,8443,8888,9200,27017];
 
 function runSimulation(target){
     const mode=$('scan-mode').value;
     let ports=[];
-    if(mode==='quick'){ports=[...COMMON_PORTS];}
+    if(mode==='quick'){ports=[...COMMON_PORTS_SIM];}
     else{const ps=parseInt($('port-start').value)||1;const pe=parseInt($('port-end').value)||(mode==='full'?65535:1024);for(let p=ps;p<=pe&&ports.length<500;p++)ports.push(p);}
     const total=ports.length;
-    state.scanMeta={input:target,ip:'[sim] '+target,hostname:target,mode,total_ports:total};
-    $('status-target').textContent=target+' (simulado)';
+    state.scanMeta={input:target,ip:target,hostname:target,mode,total_ports:total};
+    $('status-target').textContent=target+' (sin backend)';
     $('st-total').textContent=total;
 
     const openSet=new Set();
@@ -501,7 +507,7 @@ function runSimulation(target){
             const port=ports[idx];
             const st=openSet.has(port)?'open':Math.random()<0.07?'filtered':'closed';
             const ms=st==='open'?Math.floor(Math.random()*120)+8:null;
-            const d={port,state:st,service:SERVICES[port]||'unknown',response_time_ms:ms,scanned:idx+1,progress:Math.round(((idx+1)/total)*100)};
+            const d={port,state:st,service:SERVICES[port]||'Unknown',response_time_ms:ms,scanned:idx+1,progress:Math.round(((idx+1)/total)*100)};
             state.results.push(d);state.counts[d.state]++;
             $('st-scanned').textContent=d.scanned;$('st-open').textContent=state.counts.open;
             $('progress-fill').style.width=d.progress+'%';
