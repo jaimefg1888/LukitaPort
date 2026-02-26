@@ -1,10 +1,4 @@
-"""
-resolver.py — DNS resolution and IP validation
-jaimefg1888 | LukitaPort
-"""
-
 import socket
-import re
 
 
 def is_valid_ip(target: str) -> bool:
@@ -16,10 +10,6 @@ def is_valid_ip(target: str) -> bool:
 
 
 def resolve_target(target: str) -> dict:
-    """
-    Acepta un dominio o IP y devuelve la IP resuelta junto con metadatos.
-    Si ya es una IP válida, simplemente la retorna sin resolver nada.
-    """
     target = target.strip()
 
     if is_valid_ip(target):
@@ -35,7 +25,7 @@ def resolve_target(target: str) -> dict:
             "error": None,
         }
 
-    # Es un dominio, intentamos resolver
+    # domain — try to resolve it
     try:
         ip = socket.gethostbyname(target)
         return {

@@ -1,173 +1,237 @@
-# LukitaPort 🔍
+# LukitaPort
 
-**Escáner de puertos con interfaz web profesional. Backend en Python (FastAPI) y frontend en HTML/CSS/JS vanilla.**
+Port scanner with a real-time web interface. Python backend (FastAPI + raw sockets) streams results to the browser as each port is checked, no page refresh needed.
 
-> ⚠️ **AVISO LEGAL / LEGAL NOTICE:** Esta herramienta es exclusivamente para uso educativo y en sistemas sobre los que posees autorización expresa. El escaneo no autorizado de redes ajenas puede ser ilegal. / *This tool is strictly for educational use and systems you own or have explicit authorization to scan. Unauthorized port scanning may be illegal.*
+> ⚠️ **For educational use only.** Only scan systems you own or have explicit written permission to test. Unauthorized port scanning may be illegal in your jurisdiction.
 
 ---
 
 ## Español
 
-### ¿Qué es LukitaPort?
+### ¿Qué hace exactamente?
 
-LukitaPort es una herramienta de escaneo de puertos con interfaz web, diseñada para aprender y practicar conceptos de redes y seguridad en entornos controlados. Los resultados llegan en tiempo real usando Server-Sent Events (SSE), sin necesidad de recargar la página.
+LukitaPort abre conexiones TCP contra cada puerto del objetivo y, dependiendo de lo que ocurra, clasifica el resultado como:
 
-### Características
+- **Abierto** — la conexión se estableció (`connect_ex` devolvió 0). Hay algo escuchando.
+- **Cerrado** — la conexión fue rechazada. El puerto existe pero no hay servicio activo.
+- **Filtrado** — la conexión expiró (timeout). Lo más probable es que un firewall esté descartando los paquetes.
 
-- Resolución DNS automática: acepta IPs o dominios (`www.ejemplo.com`)
-- Tres modos de escaneo: rápido (puertos comunes), personalizado (rango definible) y completo (1-65535)
-- Detección de servicio por puerto (HTTP, SSH, FTP, MySQL, etc.)
-- Resultados en tiempo real vía SSE
-- Tabla filtrable por estado: abierto / cerrado / filtrado
-- Tiempo de respuesta por puerto
-- Exportación de resultados a JSON
-- Interfaz oscura y profesional, optimizada para uso en escritorio y móvil
+Cada resultado llega al navegador en tiempo real mediante **Server-Sent Events (SSE)**: el backend hace streaming de eventos JSON uno a uno mientras escanea, y el frontend los pinta en la tabla según llegan, sin esperar a que termine el escaneo completo.
+
+### Cómo funciona por dentro
+
+```
+Usuario introduce IP/dominio
+        ↓
+Frontend limpia la entrada (quita https://, paths, etc.)
+        ↓
+GET /api/scan?target=...&mode=...&timeout=...
+        ↓
+Backend resuelve DNS si es un dominio → obtiene la IP
+        ↓
+Construye la lista de puertos según el modo elegido
+        ↓
+Escanea puerto a puerto con sockets nativos
+        ↓
+Hace yield de cada resultado como evento SSE → data: {...}\n\n
+        ↓
+Frontend recibe cada evento y actualiza la tabla en vivo
+        ↓
+Evento "done" → muestra resumen final + guarda en historial
+```
+
+### Modos de escaneo
+
+| Modo | Puertos | Cuándo usarlo |
+|---|---|---|
+| Rápido | 30 puertos comunes | Revisión rápida de servicios habituales |
+| Personalizado | Rango definido por el usuario | Cuando sabes qué rango te interesa |
+| Completo | 1 – 65535 | Auditoría exhaustiva (puede tardar varios minutos) |
+
+### Clasificación de riesgo
+
+Los puertos abiertos se etiquetan según su riesgo potencial:
+
+- **Alto** — protocolos con historial de vulnerabilidades críticas: FTP (21), Telnet (23), SMTP (25), NetBIOS (139), SMB (445), bases de datos expuestas (MySQL, PostgreSQL, Redis, MongoDB…), RDP (3389), VNC (5900).
+- **Medio** — servicios que conviene monitorizar: SSH (22), DNS (53), IMAP (143), proxies alternativos.
+- **Bajo** — servicios web estándar: HTTP (80), HTTPS (443), SMTPS, IMAPS.
 
 ### Estructura del proyecto
 
 ```
 LukitaPort/
-├── main.py          # Servidor FastAPI, endpoints SSE y estáticos
-├── scanner.py       # Lógica de escaneo con sockets nativos
-├── resolver.py      # Resolución DNS y validación de IP
-├── frontend/
-│   ├── index.html   # Interfaz web completa
-│   └── styles.css   # Estilos (tema oscuro, diseño terminal)
+├── main.py              # Servidor FastAPI — endpoints /api/scan y /api/resolve
+├── scanner.py           # Lógica de escaneo con sockets nativos
+├── resolver.py          # Resolución DNS y validación de IP
 ├── requirements.txt
-└── README.md
+├── LICENSE
+├── README.md
+└── frontend/
+    ├── index.html       # Interfaz web (servida por FastAPI en localhost)
+    └── styles.css       # Estilos
 ```
+
+También existe **`lukitaport-github.html`** en la raíz: una versión standalone del frontend con todos los estilos y scripts embebidos, pensada para servirse como página estática (GitHub Pages, etc.). Intenta conectar al backend en `http://localhost:8000`; si no está disponible, cae a un modo simulación para que la interfaz siga siendo navegable.
 
 ### Instalación
 
-**Requisitos:**
-- Python 3.10+
-- pip
-- (Opcional) nmap instalado en el sistema para funciones avanzadas
+Requisitos: Python 3.10+
 
 ```bash
-# Clona o descarga el proyecto
 git clone https://github.com/jaimefg1888/LukitaPort
 cd LukitaPort
 
-# Crea un entorno virtual (recomendado)
 python -m venv venv
 source venv/bin/activate      # Linux/macOS
 venv\Scripts\activate         # Windows
 
-# Instala dependencias
 pip install -r requirements.txt
 ```
 
 ### Uso
 
 ```bash
-# Arranca el servidor
 uvicorn main:app --host 0.0.0.0 --port 8000
-
-# Abre en el navegador
-# http://localhost:8000
 ```
 
-Una vez en la interfaz:
-1. Escribe la IP o dominio objetivo en el campo de texto
-2. Selecciona el modo de escaneo
-3. Ajusta el timeout si es necesario
-4. Pulsa **INICIAR ESCANEO** y observa los resultados en tiempo real
+Abre `http://localhost:8000` en el navegador.
 
-### Dependencias
+1. Escribe la IP o dominio objetivo (admite `https://ejemplo.com` — lo limpia automáticamente).
+2. Elige el modo de escaneo.
+3. Ajusta el timeout si la red es lenta o el objetivo tiene latencia alta.
+4. Pulsa **Iniciar Escaneo**.
 
-| Paquete | Versión | Uso |
-|---|---|---|
-| fastapi | 0.111.0 | API y servidor web |
-| uvicorn | 0.30.1 | Servidor ASGI |
-| python-nmap | 0.7.1 | Detección avanzada de servicios |
+Los resultados aparecen en la tabla mientras el escaneo avanza. Al terminar puedes exportarlos en JSON, CSV o como informe HTML.
+
+### Notas técnicas
+
+- El escaneo es **single-threaded y secuencial** a propósito: más sencillo de entender y suficiente para aprender. En producción se paralelizaría con `asyncio` o un thread pool.
+- El modo completo (1-65535) puede tardar entre 1 y 20 minutos dependiendo del timeout y la red.
+- En redes locales los resultados son prácticamente instantáneos; en hosts remotos influye mucho la latencia.
+- `python-nmap` está en las dependencias por si quieres ampliar con detección de versiones, pero el escaneo base no lo usa.
+
+### Advertencia legal
+
+Escanear puertos de sistemas que no te pertenecen o para los que no tienes autorización escrita puede constituir un delito informático. Úsalo solo en tu propia infraestructura o en entornos de laboratorio.
 
 ---
 
 ## English
 
-### What is LukitaPort?
+### What does it do?
 
-LukitaPort is a web-based port scanner built for learning and practicing networking and security concepts in controlled environments. Results stream in real time using Server-Sent Events (SSE), no page refresh required.
+LukitaPort opens TCP connections against each port of the target and classifies the result as:
 
-### Features
+- **Open** — connection succeeded (`connect_ex` returned 0). Something is listening.
+- **Closed** — connection refused. The port is reachable but no service is running on it.
+- **Filtered** — connection timed out. Most likely a firewall is dropping the packets.
 
-- Automatic DNS resolution: accepts IPs or domains (`www.example.com`)
-- Three scan modes: quick (common ports), custom (user-defined range), full (1-65535)
-- Service detection per port (HTTP, SSH, FTP, MySQL, etc.)
-- Real-time results via SSE
-- Filterable table by state: open / closed / filtered
-- Response time per port
-- JSON export
-- Dark, professional UI optimized for desktop and mobile
+Results reach the browser in real time via **Server-Sent Events (SSE)**: the backend streams JSON events one by one as it scans, and the frontend renders them in the table as they arrive, without waiting for the full scan to finish.
 
-### Project Structure
+### How it works internally
+
+```
+User enters IP/domain
+        ↓
+Frontend sanitizes input (strips https://, paths, etc.)
+        ↓
+GET /api/scan?target=...&mode=...&timeout=...
+        ↓
+Backend resolves DNS if it's a domain → gets the IP
+        ↓
+Builds port list based on selected mode
+        ↓
+Scans port by port using native sockets
+        ↓
+Yields each result as an SSE event → data: {...}\n\n
+        ↓
+Frontend receives each event and updates the table live
+        ↓
+"done" event → shows final summary + saves to session history
+```
+
+### Scan modes
+
+| Mode | Ports | When to use |
+|---|---|---|
+| Quick | 30 common ports | Fast check of typical services |
+| Custom | User-defined range | When you know what range you care about |
+| Full | 1 – 65535 | Full audit (can take several minutes) |
+
+### Risk classification
+
+Open ports are labeled by potential risk:
+
+- **High** — protocols with a history of critical vulnerabilities: FTP (21), Telnet (23), SMTP (25), NetBIOS (139), SMB (445), exposed databases (MySQL, PostgreSQL, Redis, MongoDB…), RDP (3389), VNC (5900).
+- **Medium** — services worth monitoring: SSH (22), DNS (53), IMAP (143), alternative proxies.
+- **Low** — standard web services: HTTP (80), HTTPS (443), SMTPS, IMAPS.
+
+### Project structure
 
 ```
 LukitaPort/
-├── main.py          # FastAPI server, SSE and static endpoints
-├── scanner.py       # Scanning logic using native sockets
-├── resolver.py      # DNS resolution and IP validation
-├── frontend/
-│   ├── index.html   # Full web interface
-│   └── styles.css   # Styles (dark theme, terminal design)
+├── main.py              # FastAPI server — /api/scan and /api/resolve endpoints
+├── scanner.py           # Scanning logic with native sockets
+├── resolver.py          # DNS resolution and IP validation
 ├── requirements.txt
-└── README.md
+├── LICENSE
+├── README.md
+└── frontend/
+    ├── index.html       # Web interface (served by FastAPI on localhost)
+    └── styles.css       # Styles
 ```
+
+There's also **`lukitaport-github.html`** in the root: a standalone version of the frontend with all styles and scripts embedded, meant to be served as a static page (GitHub Pages, etc.). It tries to connect to the backend at `http://localhost:8000`; if unavailable, it falls back to a simulation mode so the interface stays usable.
 
 ### Installation
 
-**Requirements:**
-- Python 3.10+
-- pip
-- (Optional) nmap installed on the system for advanced features
+Requirements: Python 3.10+
 
 ```bash
-# Clone or download the project
 git clone https://github.com/jaimefg1888/LukitaPort
 cd LukitaPort
 
-# Create a virtual environment (recommended)
 python -m venv venv
 source venv/bin/activate      # Linux/macOS
 venv\Scripts\activate         # Windows
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### Usage
 
 ```bash
-# Start the server
 uvicorn main:app --host 0.0.0.0 --port 8000
-
-# Open in browser
-# http://localhost:8000
 ```
 
-Once in the interface:
-1. Enter the target IP or domain
-2. Select a scan mode
-3. Adjust timeout if needed
-4. Click **INICIAR ESCANEO** and watch results stream in real time
+Open `http://localhost:8000` in your browser.
 
-### Dependencies
+1. Enter a target IP or domain (it accepts `https://example.com` — it strips it automatically).
+2. Choose a scan mode.
+3. Adjust the timeout if the network is slow or the target has high latency.
+4. Hit **Iniciar Escaneo**.
 
-| Package | Version | Purpose |
-|---|---|---|
-| fastapi | 0.111.0 | API and web server |
-| uvicorn | 0.30.1 | ASGI server |
-| python-nmap | 0.7.1 | Advanced service detection |
+Results appear in the table as the scan progresses. When done, you can export them as JSON, CSV, or an HTML report.
 
----
+### Technical notes
 
-## Legal Warning / Advertencia legal
+- The scan is **single-threaded and sequential** by design — easier to follow and enough for learning purposes. A production version would parallelize with `asyncio` or a thread pool.
+- Full mode (1-65535) can take anywhere from 1 to 20 minutes depending on timeout and network conditions.
+- On local networks results are nearly instant; on remote hosts, latency makes a big difference.
+- `python-nmap` is in the dependencies in case you want to extend it with version detection, but the base scan doesn't use it.
 
-**ES:** Este software se proporciona con fines educativos únicamente. El autor no asume ninguna responsabilidad por el uso indebido de esta herramienta. Antes de escanear cualquier sistema, asegúrate de tener autorización por escrito del propietario. El escaneo no autorizado puede constituir un delito penal en muchos países.
+### Legal warning
 
-**EN:** This software is provided for educational purposes only. The author takes no responsibility for misuse of this tool. Before scanning any system, ensure you have written authorization from the owner. Unauthorized scanning may constitute a criminal offense in many jurisdictions.
+Scanning ports on systems you don't own or haven't received explicit written authorization to test may constitute a computer crime. Use this only on your own infrastructure or lab environments.
 
 ---
 
-*jaimefg1888 — Built with Python + FastAPI + vanilla JS*
+## GitHub description
+
+**EN:** Port scanner with real-time web UI. Python sockets + FastAPI SSE backend, vanilla JS frontend. For educational use.
+
+**ES:** Escáner de puertos con interfaz web en tiempo real. Backend en Python (sockets + FastAPI SSE) y frontend en JS vanilla. Uso educativo.
+
+---
+
+*jaimefg1888 — python + fastapi + vanilla js*
