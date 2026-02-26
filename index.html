@@ -445,8 +445,12 @@ function startScan(){
 
     const params=new URLSearchParams({target,mode:$('scan-mode').value,port_start:$('port-start').value,port_end:$('port-end').value,timeout:$('timeout').value});
     if(state.eventSource)state.eventSource.close();
+
+    // Intentar backend real; si falla, arrancar simulación
+    let backendOk=false;
     state.eventSource=new EventSource('/api/scan?'+params);
     state.eventSource.onmessage=e=>{
+        backendOk=true;
         const d=JSON.parse(e.data);
         if(d.error){showError(d.error);stopScan();return;}
         if(d.type==='meta'){
@@ -463,7 +467,51 @@ function startScan(){
         }
         if(d.type==='done')stopScan(true);
     };
-    state.eventSource.onerror=()=>{if(state.scanning)stopScan();};
+    state.eventSource.onerror=()=>{
+        if(!backendOk&&state.scanning){state.eventSource.close();state.eventSource=null;runSimulation(target);}
+        else if(state.scanning){stopScan();}
+    };
+}
+
+// ── Simulación sin backend ──
+const SERVICES={21:'ftp',22:'ssh',23:'telnet',25:'smtp',53:'dns',80:'http',110:'pop3',111:'rpcbind',135:'msrpc',139:'netbios',143:'imap',443:'https',445:'smb',465:'smtps',587:'submission',993:'imaps',995:'pop3s',1433:'mssql',1521:'oracle',3306:'mysql',3389:'rdp',5432:'postgres',5900:'vnc',6379:'redis',8080:'http-alt',8443:'https-alt',8888:'jupyter',9200:'elasticsearch',27017:'mongodb'};
+const COMMON_PORTS=[21,22,23,25,53,80,110,111,135,139,143,443,445,465,587,993,995,1433,1521,3306,3389,5432,5900,6379,8080,8443,8888,9200,27017];
+
+function runSimulation(target){
+    const mode=$('scan-mode').value;
+    let ports=[];
+    if(mode==='quick'){ports=[...COMMON_PORTS];}
+    else{const ps=parseInt($('port-start').value)||1;const pe=parseInt($('port-end').value)||(mode==='full'?65535:1024);for(let p=ps;p<=pe&&ports.length<500;p++)ports.push(p);}
+    const total=ports.length;
+    state.scanMeta={input:target,ip:'[sim] '+target,hostname:target,mode,total_ports:total};
+    $('status-target').textContent=target+' (simulado)';
+    $('st-total').textContent=total;
+
+    const openSet=new Set();
+    const cands=ports.filter(p=>SERVICES[p]).sort(()=>Math.random()-.5);
+    cands.slice(0,Math.min(Math.floor(Math.random()*5)+2,cands.length)).forEach(p=>openSet.add(p));
+
+    let idx=0;
+    const BATCH=mode==='full'?10:1;
+    const DELAY=mode==='full'?15:mode==='quick'?70:25;
+
+    function step(){
+        if(!state.scanning)return;
+        for(let b=0;b<BATCH&&idx<total;b++,idx++){
+            const port=ports[idx];
+            const st=openSet.has(port)?'open':Math.random()<0.07?'filtered':'closed';
+            const ms=st==='open'?Math.floor(Math.random()*120)+8:null;
+            const d={port,state:st,service:SERVICES[port]||'unknown',response_time_ms:ms,scanned:idx+1,progress:Math.round(((idx+1)/total)*100)};
+            state.results.push(d);state.counts[d.state]++;
+            $('st-scanned').textContent=d.scanned;$('st-open').textContent=state.counts.open;
+            $('progress-fill').style.width=d.progress+'%';
+            if(state.filter==='all'||state.filter===d.state)appendRow(d);
+            updateSummary();
+        }
+        if(idx<total&&state.scanning)setTimeout(step,DELAY);
+        else if(state.scanning)stopScan(true);
+    }
+    setTimeout(step,DELAY);
 }
 
 function stopScan(completed=false){
