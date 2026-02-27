@@ -42,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="frontend", html=True), name="static")
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 # ─── In-memory screenshot store ───────────────────────────────────────────────
 # {target: {"png": bytes, "ts": float}}
@@ -115,8 +115,7 @@ async def scan(
 
     if resolution["error"] or not resolution["ip"]:
         async def error_stream():
-            err_msg = resolution["error"]
-            yield f"data: {json.dumps({'error': f'Could not resolve target: {err_msg}'})} \n\n"
+            yield f"data: {json.dumps({'error': f'Could not resolve target: {resolution[\"error\"]}'})} \n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     ip    = resolution["ip"]

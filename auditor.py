@@ -1,56 +1,71 @@
 """
-auditor.py — LukitaPort
-Módulo de auditoría avanzada:
-  - Cabeceras de seguridad HTTP
-  - Detección de tecnologías web (Wappalyzer-lite)
-  - Rutas sensibles (OSINT pasivo)
+auditor.py — LukitaPort v2.0
+Advanced audit module:
+  - HTTP security headers
+  - Technology detection (Wappalyzer-lite) + WAF detection
+  - Sensitive path scanner
+
+Fixes maintained from previous version:
+  FIX 2 — shared prefetch: one HTTP request for header + tech audit.
+  FIX 4 — async httpx path scanning, no ThreadPoolExecutor.
 """
 
 import re
-import socket
-import time
+import asyncio
 from typing import Optional
-import urllib.request
-import urllib.error
-import ssl
+import httpx
 
 
-# ─── helpers ──────────────────────────────────────────────────────────────────
+# ─── HTTP client ──────────────────────────────────────────────────────────────
 
-def _fetch(url: str, timeout: float = 5.0) -> Optional[tuple[int, dict, str]]:
-    """Devuelve (status_code, headers_dict, body) o None en error."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+def _make_client(timeout: float = 6.0) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        verify=False,
+        follow_redirects=True,
+        timeout=timeout,
+        headers={"User-Agent": "Mozilla/5.0 (LukitaPort/2.0 Security Audit)"},
+        limits=httpx.Limits(max_connections=40, max_keepalive_connections=10),
+    )
+
+
+async def _fetch_async(
+    client: httpx.AsyncClient,
+    url: str,
+    timeout: float = 6.0,
+) -> Optional[tuple[int, dict, str]]:
     try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (LukitaPort/1.0 Security Audit)"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            body = resp.read(65536).decode("utf-8", errors="replace")
-            return resp.status, dict(resp.headers), body
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read(16384).decode("utf-8", errors="replace")
-        except Exception:
-            body = ""
-        return e.code, dict(e.headers), body
+        resp = await client.get(url, timeout=timeout)
+        return resp.status_code, dict(resp.headers), resp.text[:200_000]
+    except httpx.HTTPStatusError as e:
+        return e.response.status_code, dict(e.response.headers), e.response.text[:16_384]
     except Exception:
         return None
 
 
-def _choose_base_url(target: str, open_ports: list) -> Optional[str]:
-    """Devuelve la URL base más adecuada según los puertos abiertos."""
+def _choose_base_url(target: str, open_ports: list) -> str:
     if 443 in open_ports or 8443 in open_ports:
         return f"https://{target}"
     if 80 in open_ports or 8080 in open_ports:
         return f"http://{target}"
-    # Intentar https de todos modos
     return f"https://{target}"
 
 
-# ─── 1. Cabeceras de seguridad HTTP ──────────────────────────────────────────
+async def _prefetch(
+    target: str,
+    open_ports: list,
+    client: httpx.AsyncClient,
+) -> tuple[str, Optional[tuple[int, dict, str]]]:
+    base_url = _choose_base_url(target, open_ports)
+    result = await _fetch_async(client, base_url)
+
+    if result is None and base_url.startswith("https://"):
+        base_url = f"http://{target}"
+        result = await _fetch_async(client, base_url)
+
+    return base_url, result
+
+
+# ─── 1. HTTP Security Headers ─────────────────────────────────────────────────
 
 SECURITY_HEADERS = {
     "Strict-Transport-Security": {
@@ -58,553 +73,377 @@ SECURITY_HEADERS = {
         "description_es": "Obliga a usar HTTPS. Previene ataques de downgrade y cookies robadas.",
         "description_en": "Forces HTTPS. Prevents downgrade attacks and cookie theft.",
         "severity": "high",
+        "example": "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload",
     },
     "Content-Security-Policy": {
         "label": "CSP",
         "description_es": "Limita las fuentes de scripts y recursos. Mitiga XSS.",
         "description_en": "Restricts script/resource sources. Mitigates XSS.",
         "severity": "high",
+        "example": "Content-Security-Policy: default-src 'self'; script-src 'self'",
     },
     "X-Frame-Options": {
         "label": "X-Frame-Options",
         "description_es": "Previene que la página sea cargada en un iframe (clickjacking).",
         "description_en": "Prevents the page from being loaded in an iframe (clickjacking).",
         "severity": "medium",
+        "example": "X-Frame-Options: DENY",
     },
     "X-Content-Type-Options": {
         "label": "X-Content-Type-Options",
         "description_es": "Evita que el navegador interprete el contenido con un MIME diferente.",
         "description_en": "Prevents MIME type sniffing.",
         "severity": "medium",
+        "example": "X-Content-Type-Options: nosniff",
     },
     "Referrer-Policy": {
         "label": "Referrer-Policy",
         "description_es": "Controla qué información del referer se envía en las peticiones.",
         "description_en": "Controls how much referrer info is sent with requests.",
         "severity": "low",
+        "example": "Referrer-Policy: strict-origin-when-cross-origin",
     },
     "Permissions-Policy": {
         "label": "Permissions-Policy",
         "description_es": "Controla el acceso a APIs del navegador (cámara, micrófono, geolocalización).",
         "description_en": "Controls access to browser APIs (camera, mic, geolocation).",
         "severity": "low",
+        "example": "Permissions-Policy: camera=(), microphone=(), geolocation=()",
     },
     "X-XSS-Protection": {
         "label": "X-XSS-Protection",
         "description_es": "Filtro XSS del navegador (legacy, pero sigue siendo buena práctica).",
         "description_en": "Browser XSS filter (legacy, but still good practice).",
         "severity": "low",
+        "example": "X-XSS-Protection: 1; mode=block",
     },
 }
 
 DANGEROUS_HEADERS = {
-    "Server": "Revela el software del servidor y versión.",
-    "X-Powered-By": "Revela el lenguaje/framework del backend.",
-    "X-AspNet-Version": "Revela la versión de ASP.NET.",
-    "X-AspNetMvc-Version": "Revela la versión de ASP.NET MVC.",
+    "Server":             "Reveals server software and version.",
+    "X-Powered-By":      "Reveals backend language/framework.",
+    "X-AspNet-Version":  "Reveals ASP.NET version.",
+    "X-AspNetMvc-Version": "Reveals ASP.NET MVC version.",
 }
 
 
-def audit_headers(target: str, open_ports: list) -> dict:
-    base_url = _choose_base_url(target, open_ports)
-    result = fetch_result = _fetch(base_url)
+def _audit_headers_from_prefetch(
+    base_url: str,
+    prefetch: Optional[tuple[int, dict, str]],
+) -> dict:
+    if prefetch is None:
+        return {
+            "error": "Could not connect", "url": base_url,
+            "present": [], "missing": [], "dangerous": [], "score": 0,
+        }
 
-    # Si falla https, intentar http
-    if result is None and base_url.startswith("https://"):
-        base_url = f"http://{target}"
-        result = _fetch(base_url)
-
-    if result is None:
-        return {"error": "Could not connect", "url": base_url, "present": [], "missing": [], "dangerous": [], "score": 0}
-
-    status, headers, _ = result
-    # Normalizar claves a title-case para comparación
+    status, headers, _ = prefetch
     headers_norm = {k.title(): v for k, v in headers.items()}
 
-    present = []
-    missing = []
-
+    present, missing = [], []
     for header, info in SECURITY_HEADERS.items():
-        key = header.title()
-        if key in headers_norm:
-            present.append({
-                "header": header,
-                "value": headers_norm[key],
-                "label": info["label"],
-                "description_es": info["description_es"],
-                "description_en": info["description_en"],
-                "severity": info["severity"],
-                "status": "present",
-            })
+        entry = {
+            "header": header, "label": info["label"],
+            "description_es": info["description_es"],
+            "description_en": info["description_en"],
+            "severity": info["severity"], "example": info.get("example", ""),
+        }
+        if header.title() in headers_norm:
+            entry["value"]  = headers_norm[header.title()]
+            entry["status"] = "present"
+            present.append(entry)
         else:
-            missing.append({
-                "header": header,
-                "label": info["label"],
-                "description_es": info["description_es"],
-                "description_en": info["description_en"],
-                "severity": info["severity"],
-                "status": "missing",
-            })
+            entry["status"] = "missing"
+            missing.append(entry)
 
-    dangerous = []
-    for header, desc in DANGEROUS_HEADERS.items():
-        key = header.title()
-        if key in headers_norm:
-            dangerous.append({
-                "header": header,
-                "value": headers_norm[key],
-                "description": desc,
-            })
+    dangerous = [
+        {"header": h, "value": headers_norm[h.title()], "description": desc}
+        for h, desc in DANGEROUS_HEADERS.items()
+        if h.title() in headers_norm
+    ]
 
-    # Score 0-100
-    high_present = sum(1 for h in present if h["severity"] == "high")
-    med_present  = sum(1 for h in present if h["severity"] == "medium")
-    low_present  = sum(1 for h in present if h["severity"] == "low")
-    score = min(100, (high_present * 30) + (med_present * 20) + (low_present * 10) - (len(dangerous) * 5))
-    score = max(0, score)
-
-    grade = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 55 else "D" if score >= 35 else "F"
+    high_p = sum(1 for h in present if h["severity"] == "high")
+    med_p  = sum(1 for h in present if h["severity"] == "medium")
+    low_p  = sum(1 for h in present if h["severity"] == "low")
+    score  = max(0, min(100, high_p * 30 + med_p * 20 + low_p * 10 - len(dangerous) * 5))
+    grade  = "A" if score >= 90 else "B" if score >= 75 else "C" if score >= 55 else "D" if score >= 35 else "F"
 
     return {
-        "url": base_url,
-        "status_code": status,
-        "present": present,
-        "missing": missing,
-        "dangerous": dangerous,
-        "score": score,
-        "grade": grade,
+        "url": base_url, "status_code": status,
+        "present": present, "missing": missing, "dangerous": dangerous,
+        "score": score, "grade": grade,
     }
 
 
-# ─── 2. Detección de tecnologías web ─────────────────────────────────────────
+# ─── 2. Technology Detection (+ WAF detection) ───────────────────────────────
+#
+# WAFs added in this version (v2.0):
+#   Cloudflare    — was already present via Server header
+#   AWS WAF/CF    — via x-amz-cf-id / x-amzn-requestid / x-amz-waf headers
+#   Akamai        — via x-akamai-transformed / x-akamai-session-id / x-check-cacheable
+#   Imperva       — via x-iinfo / x-cdn (Imperva) / x-iinfo headers
+#   Sucuri        — via x-sucuri-id / x-sucuri-cache
 
 TECH_PATTERNS = {
-    # ── CMS ──────────────────────────────────────────────────────────────────
-    "WordPress": {
-        "body": [r"wp-content/", r"wp-includes/", r"/wp-json/", r"wordpress"],
-        "headers": {"X-Pingback": r"xmlrpc\.php"},
-        "icon": "📝", "category": "CMS",
-    },
-    "Joomla": {
-        "body": [r"/components/com_", r"Joomla!", r"/media/jui/"],
-        "icon": "📝", "category": "CMS",
-    },
-    "Drupal": {
-        "body": [r"Drupal\.settings", r"/sites/default/files/", r"drupal\.js"],
-        "headers": {"X-Generator": r"Drupal"},
-        "icon": "📝", "category": "CMS",
-    },
-    "Magento": {
-        "body": [r"Mage\.Cookies", r"/skin/frontend/", r"magento"],
-        "icon": "📝", "category": "CMS",
-    },
-    "TYPO3": {
-        "body": [r"typo3/", r"TYPO3"],
-        "icon": "📝", "category": "CMS",
-    },
-    "Ghost": {
-        "body": [r"ghost\.io", r"/ghost/api/"],
-        "icon": "📝", "category": "CMS",
-    },
-    # ── E-commerce ───────────────────────────────────────────────────────────
-    "Shopify": {
-        "body": [r"cdn\.shopify\.com", r"Shopify\.theme", r"shopify"],
-        "icon": "🛒", "category": "E-commerce",
-    },
-    "WooCommerce": {
-        "body": [r"woocommerce", r"wc-api", r"wc_add_to_cart"],
-        "icon": "🛒", "category": "E-commerce",
-    },
-    "PrestaShop": {
-        "body": [r"prestashop", r"/modules/ps_"],
-        "icon": "🛒", "category": "E-commerce",
-    },
-    "OpenCart": {
-        "body": [r"route=common/home", r"opencart"],
-        "icon": "🛒", "category": "E-commerce",
-    },
-    "BigCommerce": {
-        "body": [r"bigcommerce\.com", r"stencil"],
-        "icon": "🛒", "category": "E-commerce",
-    },
-    # ── JavaScript Frameworks ─────────────────────────────────────────────────
-    "React": {
-        "body": [r"react\.development\.js", r"react\.production\.min\.js", r"__react", r"data-reactroot", r"_reactFiber"],
-        "icon": "⚛️", "category": "JavaScript Framework",
-    },
-    "Vue.js": {
-        "body": [r"vue\.min\.js", r"vue\.js", r"__vue__", r"data-v-"],
-        "icon": "💚", "category": "JavaScript Framework",
-    },
-    "Angular": {
-        "body": [r"ng-version=", r"angular\.min\.js", r"ng-app", r"angular\.js"],
-        "icon": "🅰️", "category": "JavaScript Framework",
-    },
-    "Next.js": {
-        "body": [r"__NEXT_DATA__", r"/_next/static/"],
-        "icon": "▲", "category": "JavaScript Framework",
-    },
-    "Nuxt.js": {
-        "body": [r"__nuxt", r"/_nuxt/"],
-        "icon": "💚", "category": "JavaScript Framework",
-    },
-    "Svelte": {
-        "body": [r"__svelte", r"svelte-"],
-        "icon": "🔥", "category": "JavaScript Framework",
-    },
-    "Ember.js": {
-        "body": [r"ember\.min\.js", r"Ember\.VERSION"],
-        "icon": "🐹", "category": "JavaScript Framework",
-    },
-    "Backbone.js": {
-        "body": [r"backbone\.js", r"Backbone\.VERSION"],
-        "icon": "🦴", "category": "JavaScript Framework",
-    },
-    # ── JavaScript Libraries ──────────────────────────────────────────────────
-    "jQuery": {
-        "body": [r"jquery\.min\.js", r"jquery-\d+\.\d+", r"jquery\.js"],
-        "icon": "🔨", "category": "JavaScript Library",
-    },
-    "Lodash": {
-        "body": [r"lodash\.min\.js", r"lodash\.js"],
-        "icon": "🔨", "category": "JavaScript Library",
-    },
-    "Moment.js": {
-        "body": [r"moment\.min\.js", r"moment\.js"],
-        "icon": "⏰", "category": "JavaScript Library",
-    },
-    "Alpine.js": {
-        "body": [r"x-data=", r"alpine\.js"],
-        "icon": "🏔️", "category": "JavaScript Library",
-    },
-    "HTMX": {
-        "body": [r"hx-get=", r"htmx\.min\.js", r"htmx\.org"],
-        "icon": "⚡", "category": "JavaScript Library",
-    },
-    # ── CSS Frameworks ────────────────────────────────────────────────────────
-    "Bootstrap": {
-        "body": [r"bootstrap\.min\.css", r"bootstrap\.min\.js", r"bootstrap/\d"],
-        "icon": "🎨", "category": "CSS Framework",
-    },
-    "Tailwind CSS": {
-        "body": [r"tailwindcss", r"tailwind\.config", r"class=\".*\b(px-|py-|mx-|flex |grid |text-|bg-)"],
-        "icon": "🎨", "category": "CSS Framework",
-    },
-    "Bulma": {
-        "body": [r"bulma\.min\.css", r"bulma\.css"],
-        "icon": "🎨", "category": "CSS Framework",
-    },
-    "Foundation": {
-        "body": [r"foundation\.min\.css", r"foundation\.js"],
-        "icon": "🎨", "category": "CSS Framework",
-    },
-    "Material UI": {
-        "body": [r"MuiButton", r"makeStyles", r"@material-ui"],
-        "icon": "🎨", "category": "CSS Framework",
-    },
-    # ── Web Servers ───────────────────────────────────────────────────────────
-    "nginx": {
-        "headers": {"Server": r"nginx"},
-        "icon": "🔧", "category": "Web Server",
-    },
-    "Apache": {
-        "headers": {"Server": r"Apache"},
-        "icon": "🔧", "category": "Web Server",
-    },
-    "IIS": {
-        "headers": {"Server": r"IIS|Microsoft-IIS"},
-        "icon": "🔧", "category": "Web Server",
-    },
-    "LiteSpeed": {
-        "headers": {"Server": r"LiteSpeed"},
-        "icon": "⚡", "category": "Web Server",
-    },
-    "Caddy": {
-        "headers": {"Server": r"Caddy"},
-        "icon": "🔧", "category": "Web Server",
-    },
-    "Gunicorn": {
-        "headers": {"Server": r"gunicorn"},
-        "icon": "🦄", "category": "Web Server",
-    },
-    "Netlify": {
-        "headers": {"X-Netlify-Cache-Tag": r".+", "Server": r"Netlify"},
-        "icon": "☁️", "category": "Hosting",
-    },
-    "Vercel": {
-        "headers": {"X-Vercel-Id": r".+", "Server": r"Vercel"},
-        "icon": "▲", "category": "Hosting",
-    },
-    # ── CDN / Proxy ───────────────────────────────────────────────────────────
-    "Cloudflare": {
-        "headers": {"Server": r"cloudflare", "CF-RAY": r".+"},
-        "icon": "☁️", "category": "CDN / Proxy",
-    },
-    "Fastly": {
-        "headers": {"X-Served-By": r"cache-.+fastly", "X-Cache": r".+"},
-        "icon": "☁️", "category": "CDN / Proxy",
+    # ── CMS ───────────────────────────────────────────────────────────────
+    "WordPress":        {"body": [r"wp-content/", r"wp-includes/", r"/wp-json/", r"wordpress"], "headers": {"X-Pingback": r"xmlrpc\.php"}, "icon": "📝", "category": "CMS"},
+    "Joomla":           {"body": [r"/components/com_", r"Joomla!", r"/media/jui/"], "icon": "📝", "category": "CMS"},
+    "Drupal":           {"body": [r"Drupal\.settings", r"/sites/default/files/", r"drupal\.js"], "headers": {"X-Generator": r"Drupal"}, "icon": "📝", "category": "CMS"},
+    # ── E-Commerce ────────────────────────────────────────────────────────
+    "Shopify":          {"body": [r"cdn\.shopify\.com", r"shopify\.com/s/files"], "headers": {"X-Shopify-Stage": r"."}, "icon": "🛍", "category": "E-Commerce"},
+    "WooCommerce":      {"body": [r"woocommerce", r"wc-", r"/wc-api/"], "icon": "🛍", "category": "E-Commerce"},
+    "Magento":          {"body": [r"Mage\.", r"mage/", r"skin/frontend/"], "icon": "🛍", "category": "E-Commerce"},
+    "PrestaShop":       {"body": [r"prestashop", r"/modules/blockcart/"], "headers": {"X-Powered-By": r"PrestaShop"}, "icon": "🛍", "category": "E-Commerce"},
+    # ── JavaScript Frameworks ─────────────────────────────────────────────
+    "React":            {"body": [r"react\.production\.min\.js", r"__REACT_DEVTOOLS", r"data-reactroot"], "icon": "⚛️", "category": "JavaScript Framework"},
+    "Vue.js":           {"body": [r"vue\.min\.js", r"vue\.js", r"__vue__", r"data-v-"], "icon": "💚", "category": "JavaScript Framework"},
+    "Angular":          {"body": [r"angular\.min\.js", r"ng-version=", r"ng-app="], "icon": "🔴", "category": "JavaScript Framework"},
+    "Next.js":          {"body": [r"__NEXT_DATA__", r"/_next/static/"], "icon": "▲", "category": "JavaScript Framework"},
+    "Nuxt.js":          {"body": [r"__nuxt", r"_nuxt/", r"nuxt\.js"], "icon": "💚", "category": "JavaScript Framework"},
+    # ── Libraries / CSS ───────────────────────────────────────────────────
+    "jQuery":           {"body": [r"jquery\.min\.js", r"jquery-[0-9]"], "icon": "🔵", "category": "JavaScript Library"},
+    "Bootstrap":        {"body": [r"bootstrap\.min\.css", r"bootstrap\.min\.js"], "icon": "🅱", "category": "CSS Framework"},
+    "Tailwind CSS":     {"body": [r"tailwind\.css", r"tailwindcss"], "icon": "🌊", "category": "CSS Framework"},
+    # ── Web Servers ───────────────────────────────────────────────────────
+    "Apache":           {"headers": {"Server": r"Apache"}, "icon": "🪶", "category": "Web Server"},
+    "Nginx":            {"headers": {"Server": r"nginx"}, "icon": "🟩", "category": "Web Server"},
+    "IIS":              {"headers": {"Server": r"IIS"}, "icon": "🪟", "category": "Web Server"},
+    # ── CDN ───────────────────────────────────────────────────────────────
+    "Cloudflare":       {"headers": {"Server": r"cloudflare", "CF-Ray": r"."}, "icon": "🌐", "category": "CDN / WAF"},
+    # ── Backend ───────────────────────────────────────────────────────────
+    "PHP":              {"headers": {"X-Powered-By": r"PHP"}, "body": [r"\.php\b"], "icon": "🐘", "category": "Backend Language"},
+    "Python / Django":  {"headers": {"Server": r"WSGIServer|gunicorn|Django"}, "body": [r"csrfmiddlewaretoken"], "icon": "🐍", "category": "Backend Framework"},
+    "Laravel":          {"body": [r"laravel_session", r"Laravel"], "headers": {"Set-Cookie": r"laravel_session"}, "icon": "🔴", "category": "Backend Framework"},
+    "Ruby on Rails":    {"headers": {"Server": r"Passenger"}, "body": [r"rails", r"ActionController"], "icon": "💎", "category": "Backend Framework"},
+    "ASP.NET":          {"headers": {"X-Powered-By": r"ASP\.NET", "X-AspNet-Version": r"."}, "body": [r"__VIEWSTATE"], "icon": "🪟", "category": "Backend Framework"},
+    "Node.js / Express":{"headers": {"X-Powered-By": r"Express"}, "icon": "🟩", "category": "Backend Framework"},
+    # ── Analytics ─────────────────────────────────────────────────────────
+    "Google Analytics": {"body": [r"google-analytics\.com/analytics\.js", r"gtag\(", r"UA-\d+-\d+", r"G-[A-Z0-9]+"], "icon": "📊", "category": "Analytics"},
+    "Google Tag Manager":{"body": [r"googletagmanager\.com/gtm\.js", r"GTM-[A-Z0-9]+"], "icon": "🏷", "category": "Analytics"},
+    "Hotjar":           {"body": [r"hotjar\.com"], "icon": "🔥", "category": "Analytics"},
+    "Matomo":           {"body": [r"matomo\.js", r"piwik\.js"], "icon": "📊", "category": "Analytics"},
+    # ── Chat / Marketing ──────────────────────────────────────────────────
+    "Zendesk":          {"body": [r"zopim\.com", r"zendesk\.com"], "icon": "💬", "category": "Chat"},
+    "Tawk.to":          {"body": [r"tawk\.to"], "icon": "💬", "category": "Chat"},
+    "HubSpot":          {"body": [r"hubspot\.com", r"hs-scripts\.com"], "icon": "🟠", "category": "Marketing"},
+    # ── WAF / Security ────────────────────────────────────────────────────
+    "AWS WAF / CloudFront": {
+        "headers": {
+            "X-Amz-Cf-Id":       r".",
+            "X-Amzn-Requestid":  r".",
+            "X-Amz-Waf-Action":  r".",
+            "X-Cache":           r"CloudFront",
+        },
+        "body": [r"AmazonWAF", r"Request blocked by AWS WAF"],
+        "icon": "🛡", "category": "WAF",
     },
     "Akamai": {
-        "headers": {"X-Check-Cacheable": r".+", "Server": r"AkamaiGHost"},
-        "icon": "☁️", "category": "CDN / Proxy",
+        "headers": {
+            "X-Akamai-Transformed":  r".",
+            "X-Akamai-Session-Id":   r".",
+            "X-Check-Cacheable":     r".",
+            "X-True-Cache-Key":      r".",
+            "Akamai-Cache-Status":   r".",
+        },
+        "body": [r"akamai\.net", r"Reference\s#\d+\.\d+\.\d+"],
+        "icon": "🛡", "category": "WAF",
     },
-    "AWS CloudFront": {
-        "headers": {"X-Amz-Cf-Id": r".+", "Via": r"CloudFront"},
-        "icon": "☁️", "category": "CDN / Proxy",
+    "Imperva / Incapsula": {
+        "headers": {
+            "X-Iinfo":        r".",
+            "X-Cdn":          r"[Ii]mperva|[Ii]ncapsula",
+            "X-Incap-Ses":    r".",
+            "Set-Cookie":     r"incap_ses|visid_incap",
+        },
+        "body": [r"incapsula incident id", r"Powered by Incapsula"],
+        "icon": "🛡", "category": "WAF",
     },
-    # ── Backend Languages ─────────────────────────────────────────────────────
-    "PHP": {
-        "headers": {"X-Powered-By": r"PHP"},
-        "body": [r"\.php"],
-        "icon": "🐘", "category": "Backend",
+    "Sucuri": {
+        "headers": {
+            "X-Sucuri-Id":    r".",
+            "X-Sucuri-Cache": r".",
+            "Server":         r"Sucuri/Cloudproxy",
+        },
+        "body": [r"sucuri\.net", r"Access Denied - Sucuri Website Firewall"],
+        "icon": "🛡", "category": "WAF",
     },
-    "ASP.NET": {
-        "headers": {"X-Powered-By": r"ASP\.NET", "X-AspNet-Version": r".+"},
-        "icon": "🔵", "category": "Backend",
+    "ModSecurity": {
+        "body": [r"Mod_Security|mod_security|NOYB"],
+        "headers": {"Server": r"[Mm]od.?[Ss]ecurity"},
+        "icon": "🛡", "category": "WAF",
     },
-    "Ruby on Rails": {
-        "headers": {"X-Powered-By": r"Phusion Passenger"},
-        "body": [r"csrf-token", r"rails"],
-        "icon": "💎", "category": "Backend",
-    },
-    "Django": {
-        "body": [r"csrfmiddlewaretoken", r"__admin_media_prefix__"],
-        "icon": "🐍", "category": "Backend",
-    },
-    "Laravel": {
-        "body": [r"laravel_session", r"XSRF-TOKEN"],
-        "headers": {"X-Powered-By": r"Laravel"},
-        "icon": "🔴", "category": "Backend",
-    },
-    "Express.js": {
-        "headers": {"X-Powered-By": r"Express"},
-        "icon": "🟢", "category": "Backend",
-    },
-    "FastAPI": {
-        "body": [r"FastAPI", r"openapi\.json"],
-        "icon": "⚡", "category": "Backend",
-    },
-    "Spring": {
-        "headers": {"X-Application-Context": r".+"},
-        "body": [r"spring", r"Spring Framework"],
-        "icon": "🍃", "category": "Backend",
-    },
-    # ── Analytics / Marketing ─────────────────────────────────────────────────
-    "Google Analytics": {
-        "body": [r"google-analytics\.com/analytics\.js", r"gtag\(", r"UA-\d{6,}-\d", r"G-[A-Z0-9]{8,}"],
-        "icon": "📊", "category": "Analytics",
-    },
-    "Google Tag Manager": {
-        "body": [r"googletagmanager\.com/gtm\.js", r"GTM-[A-Z0-9]+"],
-        "icon": "📊", "category": "Analytics",
-    },
-    "Matomo": {
-        "body": [r"matomo\.js", r"piwik\.js"],
-        "icon": "📊", "category": "Analytics",
-    },
-    "Hotjar": {
-        "body": [r"hotjar\.com", r"hjid"],
-        "icon": "🔥", "category": "Analytics",
-    },
-    "Plausible": {
-        "body": [r"plausible\.io"],
-        "icon": "📊", "category": "Analytics",
-    },
-    # ── Security / Auth ───────────────────────────────────────────────────────
-    "Cloudflare Turnstile": {
-        "body": [r"challenges\.cloudflare\.com/turnstile"],
-        "icon": "🛡️", "category": "Security",
-    },
-    "reCAPTCHA": {
-        "body": [r"recaptcha\.net", r"google\.com/recaptcha"],
-        "icon": "🛡️", "category": "Security",
-    },
-    "hCaptcha": {
-        "body": [r"hcaptcha\.com"],
-        "icon": "🛡️", "category": "Security",
-    },
-    "Auth0": {
-        "body": [r"auth0\.com", r"auth0\.js"],
-        "icon": "🔐", "category": "Auth",
-    },
-    "Okta": {
-        "body": [r"okta\.com", r"okta-signin"],
-        "icon": "🔐", "category": "Auth",
-    },
-    # ── Fonts / UI ───────────────────────────────────────────────────────────
-    "Font Awesome": {
-        "body": [r"fontawesome", r"fa-solid", r"fa-brands"],
-        "icon": "🔤", "category": "UI Library",
-    },
-    "Google Fonts": {
-        "body": [r"fonts\.googleapis\.com", r"fonts\.gstatic\.com"],
-        "icon": "🔤", "category": "UI Library",
-    },
-    # ── Chat / Support ────────────────────────────────────────────────────────
-    "Intercom": {
-        "body": [r"intercomcdn\.com", r"intercom\.io"],
-        "icon": "💬", "category": "Chat",
-    },
-    "Zendesk": {
-        "body": [r"zopim\.com", r"zendesk\.com", r"zd-"],
-        "icon": "💬", "category": "Chat",
-    },
-    "Tawk.to": {
-        "body": [r"tawk\.to"],
-        "icon": "💬", "category": "Chat",
-    },
-    "HubSpot": {
-        "body": [r"hubspot\.com", r"hs-scripts\.com"],
-        "icon": "🟠", "category": "Marketing",
+    "F5 BIG-IP ASM": {
+        "headers": {
+            "Set-Cookie": r"BIGipServer|TS[0-9a-f]{8}",
+            "Server":     r"BigIP|BIG-IP",
+        },
+        "body": [r"The requested URL was rejected"],
+        "icon": "🛡", "category": "WAF",
     },
 }
 
 
-def detect_technologies(target: str, open_ports: list) -> dict:
-    base_url = _choose_base_url(target, open_ports)
-    fetch = _fetch(base_url)
-
-    if fetch is None and base_url.startswith("https://"):
-        base_url = f"http://{target}"
-        fetch = _fetch(base_url)
-
-    if fetch is None:
+async def _detect_technologies_from_prefetch(
+    base_url: str,
+    prefetch: Optional[tuple[int, dict, str]],
+    client: httpx.AsyncClient,
+) -> dict:
+    if prefetch is None:
         return {"error": "Could not connect", "url": base_url, "technologies": []}
 
-    status, headers, body = fetch
+    status, headers, body = prefetch
+
+    extra_body = ""
+    for extra in ["/wp-json/wp/v2/", "/feed/", "/wp-login.php"]:
+        r = await _fetch_async(client, base_url.rstrip("/") + extra, timeout=3.0)
+        if r and r[0] in (200, 301, 302):
+            extra_body += r[2]
+            break
+
+    full_body = body + extra_body
     headers_norm = {k.lower(): v for k, v in headers.items()}
-    body_lower = body.lower()
 
-    detected = []
-    for tech_name, patterns in TECH_PATTERNS.items():
-        found = False
+    gen_match = (
+        re.search(r'<meta[^>]+name=["\'`]generator["\'`][^>]+content=["\'`]([^"\'`]+)["\'`]', full_body, re.IGNORECASE)
+        or re.search(r'<meta[^>]+content=["\'`]([^"\'`]+)["\'`][^>]+name=["\'`]generator["\'`]', full_body, re.IGNORECASE)
+    )
+    generator = gen_match.group(1) if gen_match else ""
 
-        # Check body patterns
-        for pat in patterns.get("body", []):
-            if re.search(pat, body, re.IGNORECASE):
-                found = True
+    detected, detected_names = [], set()
+
+    if generator:
+        gen_lower = generator.lower()
+        ver_m = re.search(r'\d[\d.]*', generator)
+        ver = ver_m.group() if ver_m else ""
+        for cms in ("wordpress", "joomla", "drupal"):
+            if cms in gen_lower:
+                detected.append({"name": cms.capitalize(), "icon": "📝", "category": "CMS", "version": ver})
+                detected_names.add(cms.capitalize())
                 break
 
-        # Check header patterns
+    for name, pats in TECH_PATTERNS.items():
+        if name in detected_names:
+            continue
+        found = any(re.search(p, full_body, re.IGNORECASE) for p in pats.get("body", []))
         if not found:
-            for header_key, pat in patterns.get("headers", {}).items():
-                header_val = headers_norm.get(header_key.lower(), "")
-                if header_val and re.search(pat, header_val, re.IGNORECASE):
-                    found = True
-                    break
-
+            found = any(
+                (hv := headers_norm.get(hk.lower(), "")) and re.search(hp, hv, re.IGNORECASE)
+                for hk, hp in pats.get("headers", {}).items()
+            )
         if found:
-            detected.append({
-                "name": tech_name,
-                "icon": patterns.get("icon", "⚙️"),
-                "category": patterns.get("category", "Other"),
-            })
+            detected.append({"name": name, "icon": pats.get("icon", "⚙️"), "category": pats.get("category", "Other")})
+            detected_names.add(name)
 
-    # Group by category
-    categories = {}
-    for tech in detected:
-        cat = tech["category"]
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(tech)
+    categories: dict[str, list] = {}
+    for t in detected:
+        categories.setdefault(t["category"], []).append(t)
 
     return {
-        "url": base_url,
-        "status_code": status,
-        "technologies": detected,
-        "by_category": categories,
-        "count": len(detected),
+        "url": base_url, "status_code": status,
+        "technologies": detected, "by_category": categories,
+        "count": len(detected), "generator": generator,
     }
 
 
-# ─── 3. Rutas sensibles ───────────────────────────────────────────────────────
+# ─── 3. Sensitive Path Scanner ────────────────────────────────────────────────
 
 SENSITIVE_PATHS = [
-    # Config / info disclosure
-    ("/robots.txt",              "Robots.txt",          "info",   "Puede revelar rutas ocultas / Can reveal hidden paths"),
-    ("/sitemap.xml",             "Sitemap",             "info",   "Mapa del sitio / Site structure map"),
-    ("/.git/HEAD",               ".git expuesto",       "high",   "Repositorio Git accesible públicamente / Git repo exposed"),
-    ("/.env",                    ".env expuesto",       "high",   "Variables de entorno expuestas / Env vars exposed"),
-    ("/config.php",              "config.php",          "high",   "Fichero de configuración / Config file"),
-    ("/configuration.php",       "configuration.php",   "high",   "Configuración Joomla / Joomla config"),
-    ("/wp-config.php",           "wp-config.php",       "high",   "Configuración WordPress / WordPress config"),
-    ("/phpinfo.php",             "phpinfo()",           "high",   "Información del servidor PHP / PHP server info"),
-    ("/info.php",                "info.php",            "high",   "Información del servidor / Server info"),
-    # Admin panels
-    ("/wp-admin/",               "WordPress Admin",     "medium", "Panel de administración WordPress / WordPress admin panel"),
-    ("/admin/",                  "Admin Panel",         "medium", "Panel de administración genérico / Generic admin panel"),
-    ("/administrator/",          "Joomla Admin",        "medium", "Panel de administración Joomla / Joomla admin panel"),
-    ("/login",                   "Login",               "info",   "Página de inicio de sesión / Login page"),
-    ("/dashboard",               "Dashboard",           "info",   "Dashboard / Dashboard"),
-    ("/phpmyadmin/",             "phpMyAdmin",          "high",   "Interfaz de base de datos expuesta / DB interface exposed"),
-    ("/pma/",                    "phpMyAdmin (pma)",    "high",   "Interfaz phpMyAdmin alternativa / Alt phpMyAdmin"),
-    # API / debug
-    ("/api/",                    "API Root",            "info",   "Raíz de API / API root endpoint"),
-    ("/swagger-ui.html",         "Swagger UI",          "medium", "Documentación de API expuesta / API docs exposed"),
-    ("/swagger/",                "Swagger",             "medium", "Documentación de API / API documentation"),
-    ("/api/docs",                "API Docs",            "medium", "Documentación de API / API documentation"),
-    ("/graphql",                 "GraphQL",             "medium", "Endpoint GraphQL expuesto / GraphQL endpoint"),
-    ("/debug",                   "Debug endpoint",      "high",   "Endpoint de debug / Debug endpoint"),
-    ("/console",                 "Console",             "high",   "Consola de administración / Admin console"),
-    # Backups / logs
-    ("/backup/",                 "Backup dir",          "high",   "Directorio de backups / Backup directory"),
-    ("/logs/",                   "Logs dir",            "high",   "Directorio de logs / Logs directory"),
-    ("/error_log",               "Error log",           "medium", "Registro de errores / Error log"),
-    ("/.htaccess",               ".htaccess",           "medium", "Configuración Apache / Apache config"),
-    ("/web.config",              "web.config",          "high",   "Configuración IIS / IIS config"),
-    # Common services
-    ("/server-status",           "Apache Status",       "medium", "Estado del servidor Apache / Apache server status"),
-    ("/server-info",             "Apache Info",         "medium", "Información del servidor / Server info"),
+    ("/robots.txt",        "Robots.txt",          "info",   "Puede revelar rutas ocultas / Can reveal hidden paths"),
+    ("/sitemap.xml",       "Sitemap",              "info",   "Mapa del sitio / Site structure map"),
+    ("/.git/HEAD",         ".git expuesto",        "high",   "Repositorio Git accesible públicamente / Git repo exposed"),
+    ("/.env",              ".env expuesto",        "high",   "Variables de entorno expuestas / Env vars exposed"),
+    ("/config.php",        "config.php",           "high",   "Fichero de configuración / Config file"),
+    ("/configuration.php", "configuration.php",    "high",   "Configuración Joomla / Joomla config"),
+    ("/wp-config.php",     "wp-config.php",        "high",   "Configuración WordPress / WordPress config"),
+    ("/phpinfo.php",       "phpinfo()",            "high",   "Información del servidor PHP / PHP server info"),
+    ("/info.php",          "info.php",             "high",   "Información del servidor / Server info"),
+    ("/wp-admin/",         "WordPress Admin",      "medium", "Panel de administración WordPress / WordPress admin panel"),
+    ("/admin/",            "Admin Panel",          "medium", "Panel de administración genérico / Generic admin panel"),
+    ("/administrator/",    "Joomla Admin",         "medium", "Panel de administración Joomla / Joomla admin panel"),
+    ("/login",             "Login",                "info",   "Página de inicio de sesión / Login page"),
+    ("/dashboard",         "Dashboard",            "info",   "Dashboard / Dashboard"),
+    ("/phpmyadmin/",       "phpMyAdmin",           "high",   "Interfaz de base de datos expuesta / DB interface exposed"),
+    ("/pma/",              "phpMyAdmin (pma)",     "high",   "Interfaz phpMyAdmin alternativa / Alt phpMyAdmin"),
+    ("/api/",              "API Root",             "info",   "Raíz de API / API root endpoint"),
+    ("/swagger-ui.html",   "Swagger UI",           "medium", "Documentación de API expuesta / API docs exposed"),
+    ("/swagger/",          "Swagger",              "medium", "Documentación de API / API documentation"),
+    ("/api/docs",          "API Docs",             "medium", "Documentación de API / API documentation"),
+    ("/graphql",           "GraphQL",              "medium", "Endpoint GraphQL expuesto / GraphQL endpoint"),
+    ("/debug",             "Debug endpoint",       "high",   "Endpoint de debug / Debug endpoint"),
+    ("/console",           "Console",              "high",   "Consola de administración / Admin console"),
+    ("/backup/",           "Backup dir",           "high",   "Directorio de backups / Backup directory"),
+    ("/logs/",             "Logs dir",             "high",   "Directorio de logs / Logs directory"),
+    ("/error_log",         "Error log",            "medium", "Registro de errores / Error log"),
+    ("/.htaccess",         ".htaccess",            "medium", "Configuración Apache / Apache config"),
+    ("/web.config",        "web.config",           "high",   "Configuración IIS / IIS config"),
+    ("/server-status",     "Apache Status",        "medium", "Estado del servidor Apache / Apache server status"),
+    ("/server-info",       "Apache Info",          "medium", "Información del servidor / Server info"),
 ]
 
 
-def scan_sensitive_paths(target: str, open_ports: list, timeout: float = 4.0) -> dict:
-    base_url = _choose_base_url(target, open_ports)
-
-    found = []
-    not_found = 0
-    errors = 0
-
-    for path, label, severity, description in SENSITIVE_PATHS:
+async def _scan_sensitive_paths_async(
+    base_url: str,
+    client: httpx.AsyncClient,
+    timeout: float = 4.0,
+) -> dict:
+    async def check_one(path_tuple: tuple) -> Optional[dict]:
+        path, label, severity, description = path_tuple
         url = base_url.rstrip("/") + path
         try:
-            result = _fetch(url, timeout=timeout)
-            if result is None:
-                errors += 1
-                continue
-            status, hdrs, body = result
-            if status in (200, 301, 302, 403):
-                content_type = hdrs.get("Content-Type", hdrs.get("content-type", ""))
-                size = len(body)
-                found.append({
-                    "path": path,
-                    "label": label,
-                    "severity": severity,
-                    "description": description,
-                    "status_code": status,
-                    "content_type": content_type,
-                    "size_bytes": size,
-                    "url": url,
-                    "accessible": status == 200,
-                })
-            else:
-                not_found += 1
+            resp = await client.get(url, timeout=timeout)
+            code = resp.status_code
+            if code in (200, 301, 302, 403):
+                return {
+                    "path": path, "label": label, "severity": severity,
+                    "description": description, "status_code": code,
+                    "content_type": resp.headers.get("content-type", ""),
+                    "size_bytes": len(resp.content),
+                    "url": str(resp.url),
+                    "accessible": code == 200,
+                }
         except Exception:
-            errors += 1
+            pass
+        return None
 
-    # Sort by severity
+    raw = await asyncio.gather(
+        *[asyncio.create_task(check_one(pt)) for pt in SENSITIVE_PATHS],
+        return_exceptions=True,
+    )
+
+    found, not_found, errors = [], 0, 0
+    for r in raw:
+        if isinstance(r, Exception):
+            errors += 1
+        elif r is None:
+            not_found += 1
+        else:
+            found.append(r)
+
     order = {"high": 0, "medium": 1, "info": 2}
     found.sort(key=lambda x: order.get(x["severity"], 9))
 
-    high_count   = sum(1 for f in found if f["severity"] == "high" and f["accessible"])
-    medium_count = sum(1 for f in found if f["severity"] == "medium" and f["accessible"])
+    return {
+        "base_url": base_url, "found": found,
+        "not_found": not_found, "errors": errors,
+        "high_count":   sum(1 for f in found if f["severity"] == "high"   and f["accessible"]),
+        "medium_count": sum(1 for f in found if f["severity"] == "medium" and f["accessible"]),
+        "total_found": len(found),
+    }
+
+
+# ─── Public entry point ───────────────────────────────────────────────────────
+
+async def run_full_audit(target: str, open_ports: list) -> dict:
+    async with _make_client() as client:
+        base_url, prefetch = await _prefetch(target, open_ports, client)
+        headers_result = _audit_headers_from_prefetch(base_url, prefetch)
+        tech_result, paths_result = await asyncio.gather(
+            _detect_technologies_from_prefetch(base_url, prefetch, client),
+            _scan_sensitive_paths_async(base_url, client),
+        )
 
     return {
-        "base_url": base_url,
-        "found": found,
-        "not_found": not_found,
-        "errors": errors,
-        "high_count": high_count,
-        "medium_count": medium_count,
-        "total_found": len(found),
+        "headers":      headers_result,
+        "technologies": tech_result,
+        "paths":        paths_result,
     }

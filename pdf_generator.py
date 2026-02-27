@@ -1,17 +1,20 @@
 """
-pdf_generator.py — LukitaPort
+pdf_generator.py — LukitaPort v2.0
 Genera informes PDF profesionales con ReportLab.
+Novedad v2.0: incrusta el screenshot web (Playwright PNG) en la primera página
+si se proporciona como bytes opcionales.
 """
 
 import io
 from datetime import datetime
+from typing import Optional
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, KeepTogether
+    HRFlowable, KeepTogether, Image,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
@@ -30,12 +33,8 @@ C_DARK     = colors.HexColor("#111111")
 C_WHITE    = colors.white
 
 
-# ─── Estilos ──────────────────────────────────────────────────────────────────
-
 def make_styles():
-    base = getSampleStyleSheet()
     styles = {}
-
     styles["title"] = ParagraphStyle(
         "title", fontName="Helvetica-Bold", fontSize=28,
         textColor=C_ACCENT, spaceAfter=4, leading=32,
@@ -86,7 +85,11 @@ def _state_color(state: str) -> colors.Color:
 
 # ─── Generador principal ──────────────────────────────────────────────────────
 
-def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
+def generate_pdf(
+    scan_data: dict,
+    audit_data: Optional[dict] = None,
+    screenshot_png: Optional[bytes] = None,
+) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -97,10 +100,10 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
         bottomMargin=16 * mm,
     )
 
-    styles = make_styles()
-    story = []
-    ts = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
-    meta = scan_data.get("meta", {})
+    styles  = make_styles()
+    story   = []
+    ts      = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+    meta    = scan_data.get("meta", {})
     results = scan_data.get("results", [])
     summary = scan_data.get("summary", {})
 
@@ -118,17 +121,46 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
     story.append(Paragraph("PORT SCAN REPORT", styles["subtitle"]))
     story.append(HRFlowable(width="100%", thickness=1, color=C_ACCENT, spaceAfter=14))
 
+    # ── Screenshot (if captured) — embed on page 1 ───────────────────────
+    if screenshot_png:
+        try:
+            img_buf = io.BytesIO(screenshot_png)
+            # Scale to page width (A4 - margins = ~174mm), max height 80mm
+            max_w   = 174 * mm
+            max_h   = 80 * mm
+            img     = Image(img_buf, width=max_w, height=max_h)
+            img.hAlign = "CENTER"
+
+            story.append(Paragraph("WEB SCREENSHOT", styles["section"]))
+            story.append(img)
+            story.append(Spacer(1, 10))
+        except Exception:
+            pass  # Never crash PDF generation over a screenshot failure
+
     # ── Metadata ────────────────────────────────────────────────────────────
     story.append(Paragraph("SCAN METADATA", styles["section"]))
     target_info = meta.get("target", {}) or {}
+    geo         = target_info.get("geo") or {}
+
     meta_rows = [
         ["Target",       target_info.get("input", "—")],
         ["Resolved IP",  target_info.get("ip", "—")],
         ["Hostname",     target_info.get("hostname") or "—"],
         ["Scan mode",    target_info.get("mode", "—")],
+        ["Profile",      target_info.get("profile", "normal")],
         ["Total ports",  str(summary.get("total", "—"))],
         ["Generated",    ts],
     ]
+
+    # Append GeoIP rows if available
+    if geo:
+        if geo.get("country"):
+            meta_rows.append(["Location", f"{geo.get('city','')} · {geo.get('country','')} · {geo.get('country_code','')}"])
+        if geo.get("isp"):
+            meta_rows.append(["ISP", geo.get("isp", "")])
+        if geo.get("asn"):
+            meta_rows.append(["ASN", geo.get("asn", "")])
+
     meta_table = Table(meta_rows, colWidths=[40*mm, 130*mm])
     meta_table.setStyle(TableStyle([
         ("FONTNAME",    (0, 0), (-1, -1), "Courier"),
@@ -174,9 +206,9 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
     # ── Risk summary ─────────────────────────────────────────────────────────
     open_results = [r for r in results if r.get("state") == "open"]
     if open_results:
-        high_n   = sum(1 for r in open_results if PORT_RISK.get(r.get("port"), "info") == "high")
-        med_n    = sum(1 for r in open_results if PORT_RISK.get(r.get("port"), "info") == "medium")
-        low_n    = sum(1 for r in open_results if PORT_RISK.get(r.get("port"), "info") == "low")
+        high_n = sum(1 for r in open_results if PORT_RISK.get(r.get("port"), "info") == "high")
+        med_n  = sum(1 for r in open_results if PORT_RISK.get(r.get("port"), "info") == "medium")
+        low_n  = sum(1 for r in open_results if PORT_RISK.get(r.get("port"), "info") == "low")
         risk_rows = [[
             Paragraph(f"● HIGH RISK: {high_n} ports", ParagraphStyle("rh", fontName="Courier-Bold", fontSize=8, textColor=C_ACCENT)),
             Paragraph(f"● MEDIUM RISK: {med_n} ports", ParagraphStyle("rm", fontName="Courier-Bold", fontSize=8, textColor=C_YELLOW)),
@@ -199,15 +231,15 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
     # ── All results table ────────────────────────────────────────────────────
     story.append(Paragraph("ALL RESULTS", styles["section"]))
 
-    risk_map = {"high": "HIGH", "medium": "MED", "low": "LOW", "info": "—"}
+    risk_map  = {"high": "HIGH", "medium": "MED", "low": "LOW", "info": "—"}
     state_map = {"open": "Open", "closed": "Closed", "filtered": "Filtered"}
 
     headers_row = [
-        Paragraph("PORT", styles["label"]),
-        Paragraph("STATE", styles["label"]),
-        Paragraph("SERVICE", styles["label"]),
-        Paragraph("RISK", styles["label"]),
-        Paragraph("RESPONSE", styles["label"]),
+        Paragraph("PORT",             styles["label"]),
+        Paragraph("STATE",            styles["label"]),
+        Paragraph("SERVICE",          styles["label"]),
+        Paragraph("RISK",             styles["label"]),
+        Paragraph("RESPONSE",         styles["label"]),
         Paragraph("VERSION / BANNER", styles["label"]),
     ]
     rows = [headers_row]
@@ -222,7 +254,7 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
         if version:
             version = str(version)[:40]
 
-        state_style = ParagraphStyle("s", fontName="Courier-Bold", fontSize=7.5, textColor=_state_color(state))
+        state_style = ParagraphStyle("s",  fontName="Courier-Bold", fontSize=7.5, textColor=_state_color(state))
         risk_style  = ParagraphStyle("rk", fontName="Courier-Bold", fontSize=7.5, textColor=_risk_color(risk))
 
         rows.append([
@@ -236,8 +268,6 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
 
     col_w = [18*mm, 20*mm, 28*mm, 18*mm, 22*mm, 62*mm]
     results_table = Table(rows, colWidths=col_w, repeatRows=1)
-
-    row_bgs = [C_DARK if i % 2 == 0 else C_CARD for i in range(len(rows))]
     results_table.setStyle(TableStyle([
         ("BACKGROUND",      (0, 0), (-1, 0), colors.HexColor("#1a1a1a")),
         ("ROWBACKGROUNDS",  (0, 1), (-1, -1), [C_DARK, C_CARD]),
@@ -253,21 +283,19 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
 
     # ── Auditoría avanzada ───────────────────────────────────────────────────
     if audit_data:
-        # Cabeceras HTTP
         headers_audit = audit_data.get("headers")
         if headers_audit and not headers_audit.get("error"):
             story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORDER, spaceAfter=10))
             story.append(Paragraph("HTTP SECURITY HEADERS AUDIT", styles["section"]))
 
-            grade = headers_audit.get("grade", "?")
-            score = headers_audit.get("score", 0)
+            grade       = headers_audit.get("grade", "?")
+            score       = headers_audit.get("score", 0)
             grade_color = {"A": C_GREEN, "B": C_GREEN, "C": C_YELLOW, "D": C_YELLOW, "F": C_ACCENT}.get(grade, C_MUTED)
 
-            grade_p = Paragraph(
+            story.append(Paragraph(
                 f'<font size="20"><b>{grade}</b></font>  <font size="9">Score: {score}/100</font>',
                 ParagraphStyle("gp", fontName="Courier-Bold", fontSize=20, textColor=grade_color, leading=24)
-            )
-            story.append(grade_p)
+            ))
             story.append(Spacer(1, 8))
 
             missing = headers_audit.get("missing", [])
@@ -305,7 +333,6 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
                     ))
                 story.append(Spacer(1, 10))
 
-        # Tecnologías
         tech_data = audit_data.get("technologies")
         if tech_data and not tech_data.get("error") and tech_data.get("technologies"):
             story.append(Paragraph("DETECTED TECHNOLOGIES", styles["section"]))
@@ -335,7 +362,6 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
             story.append(tech_table)
             story.append(Spacer(1, 12))
 
-        # Rutas sensibles
         paths_data = audit_data.get("paths")
         if paths_data and paths_data.get("found"):
             story.append(Paragraph("SENSITIVE PATHS DISCOVERED", styles["section"]))
@@ -369,7 +395,7 @@ def generate_pdf(scan_data: dict, audit_data: dict | None = None) -> bytes:
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORDER, spaceAfter=8))
     story.append(Paragraph(
-        f"LukitaPort v1.0.0  ·  jaimefg1888  ·  For educational use only  ·  {ts}",
+        f"LukitaPort v2.0.0  ·  jaimefg1888  ·  For educational use only  ·  {ts}",
         ParagraphStyle("ft", fontName="Courier", fontSize=7, textColor=C_MUTED, alignment=TA_CENTER)
     ))
 
