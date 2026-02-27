@@ -1,4 +1,4 @@
-// state.js — LukitaPort v2.0
+// state.js — 
 // Single source of truth — imported by all other modules.
 
 export const state = {

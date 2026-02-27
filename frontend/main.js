@@ -1,4 +1,4 @@
-// main.js — LukitaPort v2.0
+// main.js — LukitaPort
 // Entry point. Imports all modules and wires up event listeners.
 
 import { state }         from './state.js';

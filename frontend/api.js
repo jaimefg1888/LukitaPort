@@ -1,4 +1,4 @@
-// api.js — LukitaPort v2.0
+// api.js — LukitaPort
 // Handles: EventSource streaming scan, fingerprint, audit, SSL, CVE, discover, subdomains.
 
 import { state }  from './state.js';

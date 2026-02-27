@@ -1,4 +1,4 @@
-// ui.js — LukitaPort v2.0
+// ui.js — LukitaPort
 // Handles: DOM helpers, toast, legal popup, language, table rendering, audit rendering.
 
 import { state, getRisk, RISK_LABELS } from './state.js';
