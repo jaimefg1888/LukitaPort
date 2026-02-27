@@ -1,26 +1,18 @@
-// state.js — 
+// state.js
 // Single source of truth — imported by all other modules.
 
 export const state = {
-    results:     [],    // [{port, state, service, ...}]
-    scanMeta:    null,  // meta event from SSE
+    results:     [],
+    scanMeta:    null,
     scanning:    false,
     filter:      'all',
     counts:      { open: 0, closed: 0, filtered: 0 },
     eventSource: null,
     lang:        'es',
     auditData:   null,
-    versions:    {},    // {port: {version, source, cpe}}
-    geoData:     null,  // GeoIP enrichment
-};
-
-export const PORT_RISK = {
-    21:'high', 23:'high', 25:'high', 110:'high', 139:'high', 445:'high',
-    1433:'high', 1521:'high', 3306:'high', 3389:'high', 5432:'high',
-    5900:'high', 6379:'high', 27017:'high', 1723:'high',
-    22:'medium', 53:'medium', 111:'medium', 135:'medium', 143:'medium',
-    8080:'medium', 8888:'medium', 9200:'medium',
-    80:'low', 443:'low', 465:'low', 587:'low', 993:'low', 995:'low', 8443:'low',
+    versions:    {},
+    geoData:     null,
+    portRisk:    {},   // Populated at startup from /api/config
 };
 
 export const RISK_LABELS = {
@@ -28,4 +20,16 @@ export const RISK_LABELS = {
     en: { high: 'High risk',   medium: 'Medium risk',  low: 'Low risk',    info: '—' },
 };
 
-export const getRisk = p => PORT_RISK[p] || 'info';
+export const getRisk = p => state.portRisk[p] || state.portRisk[String(p)] || 'info';
+
+export async function initConfig() {
+    try {
+        const resp = await fetch('/api/config');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        // Keys come as strings from JSON; keep them as-is so getRisk works with both
+        state.portRisk = data.portRisk || {};
+    } catch (e) {
+        console.warn('[LukitaPort] Failed to load remote config, PORT_RISK will be empty:', e);
+    }
+}
