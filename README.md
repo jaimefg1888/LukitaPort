@@ -1,8 +1,8 @@
 ## 🇬🇧 English
 
-# LukitaPort v2.0
+# LukitaPort
 
-Advanced port scanner with a real-time web interface. The FastAPI backend streams results as each port is scanned — no waiting for the full scan to finish. Includes fingerprinting, advanced security audit, CVE lookup, network discovery, subdomain enumeration, anonymous mode, and multi-format export.
+Port scanner with a real-time web interface. The FastAPI backend streams results as each port is scanned — no waiting for the full scan to finish. Includes fingerprinting, advanced security audit, CVE lookup, network discovery, subdomain enumeration, anonymous mode, and multi-format export.
 
 > **Warning:** For educational use only. Only scan systems you own or have explicit written permission to test. Unauthorized port scanning may be illegal in your jurisdiction.
 
@@ -42,7 +42,7 @@ Results stream to the browser live via **Server-Sent Events (SSE)** — the back
 
 ## Anonymous mode
 
-Enabling **Anonymous Mode** automatically forces the **Stealth** profile, adds random inter-port delays, and minimizes the scan's fingerprint to reduce the chance of detection on monitored networks. Toggle it in the scan configuration panel before starting the scan.
+Enabling **Anonymous Mode** automatically forces the **Stealth** profile and adds random inter-port delays to minimize the scan's footprint on monitored networks. Toggle it in the scan configuration panel before starting.
 
 ---
 
@@ -50,63 +50,58 @@ Enabling **Anonymous Mode** automatically forces the **Stealth** profile, adds r
 
 Open ports are tagged by potential risk:
 
-- **High** — protocols with a history of critical vulnerabilities: FTP (21), Telnet (23), SMTP (25), POP3 (110), NetBIOS (139), SMB (445), MSSQL (1433), Oracle (1521), MySQL (3306), RDP (3389), PostgreSQL (5432), VNC (5900), Redis (6379), MongoDB (27017), PPTP (1723).
-- **Medium** — worth monitoring: SSH (22), DNS (53), RPC (111), MSRPC (135), IMAP (143), HTTP-Alt (8080/8888), Elasticsearch (9200).
-- **Low** — standard web services: HTTP (80), HTTPS (443), SMTPS (465), SMTP/TLS (587), IMAPS (993), POP3S (995), HTTPS-Alt (8443).
+- **High** — FTP (21), Telnet (23), SMTP (25), POP3 (110), NetBIOS (139), SMB (445), MSSQL (1433), Oracle (1521), MySQL (3306), RDP (3389), PostgreSQL (5432), VNC (5900), Redis (6379), MongoDB (27017), PPTP (1723).
+- **Medium** — SSH (22), DNS (53), RPC (111), MSRPC (135), IMAP (143), HTTP-Alt (8080/8888), Elasticsearch (9200).
+- **Low** — HTTP (80), HTTPS (443), SMTPS (465), SMTP/TLS (587), IMAPS (993), POP3S (995), HTTPS-Alt (8443).
 
 ---
 
 ## Fingerprinting
 
-Click **Fingerprinting** after the scan completes to run nmap's service version detection (`-sV`) against all open ports. This enriches the **Version / Banner** column with product names and version numbers (e.g. `Pure-FTPd`, `nginx`, `Dovecot imapd`), which are then used by the CVE lookup for more precise results.
+Click **Fingerprinting** after the scan to run nmap's `-sV` service detection against all open ports. Enriches the Version/Banner column and gives the CVE lookup precise version data.
 
-> nmap must be installed on the system: `sudo apt install nmap` (Linux) or `winget install Insecure.Nmap` (Windows).
+> Requires nmap: `sudo apt install nmap` (Linux) · `winget install Insecure.Nmap` (Windows).
 
 ---
 
 ## Advanced audit
 
-After the scan, if any web port (80, 443, 8080, 8443) is found open, the **Advanced Audit** panel appears automatically with five tabs:
+After the scan, if any web port (80, 443, 8080, 8443) is open, the **Advanced Audit** panel appears automatically with five tabs:
 
 ### 🔒 HTTP Headers
-Audits the target's security headers. Each missing header is graded by severity (High / Medium / Low) and includes a ready-to-copy nginx directive so you can fix it immediately. A final score (0–100) and letter grade (A–F) summarises the overall posture.
+Audits security headers. Each missing one gets a severity tag (High/Medium/Low) and a ready-to-copy nginx directive. Final score 0–100 and letter grade A–F.
 
 ### 🔬 Technologies
-Detects web technologies via Playwright browser automation: CMS, frameworks, web servers, CDNs, analytics, e-commerce platforms. Results are grouped by category.
+Detects CMS, frameworks, web servers, CDNs, analytics, and e-commerce platforms via Playwright. Results grouped by category.
 
 ### 🗂 Sensitive Paths
-Crawls a list of known sensitive paths (admin panels, backup files, config files, etc.) and reports which ones return 200 OK (publicly accessible) vs 403 Forbidden (exist but blocked), with severity tags.
+Checks known sensitive paths (admin panels, backups, config files…). Reports 200 OK (accessible) vs 403 Forbidden (exists but blocked), with severity tags.
 
 ### 🔐 SSL/TLS
-For open HTTPS ports (443, 8443), analyzes the certificate and cipher configuration:
-- Certificate validity, expiry date, days remaining
-- Subject / Issuer / SANs
-- Cipher name, protocol version, key bits
-- Detects: expired certs, expiring soon (<30 days), self-signed certs, weak ciphers (RC4, DES, NULL…), deprecated protocols (SSLv2/3, TLS 1.0/1.1)
-- Letter grade: A / B / C / F
+Analyzes certificate and cipher config on open HTTPS ports. Detects expired certs, self-signed certs, weak ciphers (RC4, DES…), deprecated protocols (SSLv2/3, TLS 1.0/1.1). Grade: A/B/C/F.
 
 ### 🐛 CVE
-Queries the NVD (National Vulnerability Database) for known CVEs affecting the detected services. Run Fingerprinting first for precise version-aware results; or click **Search CVEs now** to run it against service names only. Results are sorted by CVSS score and show severity, description, and a direct NVD link.
+Queries the NVD for known CVEs affecting detected services. Run Fingerprinting first for version-aware results, or click **Search CVEs now** to run immediately.
 
-> The NVD free API allows 1 request every 6 seconds. For 13 open ports, expect ~85 seconds. Results are cached for 10 minutes.
+> NVD free tier: 1 request per 6 seconds. 13 open ports ≈ 85 seconds. Results cached 10 min.
 
 ---
 
 ## OSINT & Network Discovery
 
-Below the scan configuration panel:
+Panel below the scan configuration:
 
 ### Ping Sweep (CIDR)
-Enter a CIDR range (e.g. `192.168.1.0/24`) to discover live hosts on the network. Click any result to load it as a scan target.
+Enter a CIDR range (e.g. `192.168.1.0/24`) to discover live hosts. Click any result to load it as the scan target.
 
 ### Subdomain Enumeration
-Enter a domain to enumerate its subdomains via the crt.sh certificate transparency logs. Results show the subdomain, resolved IP (if any), certificate expiry date, and a one-click scan button.
+Enter a domain to enumerate subdomains via crt.sh certificate transparency logs. Shows subdomain, resolved IP, cert expiry, and a one-click scan button.
 
 ---
 
 ## GeoIP enrichment
 
-During the scan, the target IP is automatically enriched with geolocation and ASN data (country, city, ISP, AS number) displayed in the status bar.
+The target IP is automatically enriched with country, city, ISP, and ASN data during the scan, shown in the status bar.
 
 ---
 
@@ -114,11 +109,11 @@ During the scan, the target IP is automatically enriched with geolocation and AS
 
 | Format | Generated by | Contents |
 |---|---|---|
-| JSON | Client | Full scan data + metadata + GeoIP + versions |
+| JSON | Client | Full scan + metadata + GeoIP + versions |
 | CSV | Client | Port, state, service, risk, response time, version |
 | HTML | Client | Self-contained visual report |
-| PDF | Server (ReportLab) | Formatted report with audit data and optional screenshot |
-| Markdown | Server | Report in .md format for documentation |
+| PDF | Server (ReportLab) | Formatted report with audit data + optional screenshot |
+| Markdown | Server | .md report for documentation |
 
 ---
 
@@ -139,13 +134,13 @@ LukitaPort/
 ├── LICENSE
 ├── README.md
 └── frontend/
-    ├── index.html       # Main interface
-    ├── styles.css       # Dark theme styles
-    ├── main.js          # Entry point — event listeners
-    ├── api.js           # SSE scan, fingerprint, audit, CVE, discover, subdomains
-    ├── ui.js            # DOM helpers, table rendering, audit rendering, toasts
-    ├── state.js         # Single source of truth — shared app state
-    └── export.js        # JSON, CSV, HTML, PDF, Markdown export
+    ├── index.html
+    ├── styles.css
+    ├── main.js
+    ├── api.js
+    ├── ui.js
+    ├── state.js
+    └── export.js
 ```
 
 ---
@@ -174,16 +169,15 @@ playwright install chromium --with-deps
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000`, enter a target IP or domain, choose a mode and profile, and hit **Start Scan**. Results appear as the scan runs.
+Open `http://localhost:8000`, enter a target IP or domain, pick a mode and profile, and hit **Start Scan**.
 
 ---
 
 ## Docker
 
 ```bash
-docker compose up --build      # first run
-docker compose up              # subsequent runs
-docker compose up -d           # detached
+docker compose up --build
+docker compose up -d
 ```
 
 Open `http://localhost:8000`. nmap and Playwright/Chromium are included in the image.
@@ -192,18 +186,16 @@ Open `http://localhost:8000`. nmap and Playwright/Chromium are included in the i
 
 ## Technical notes
 
-- The async scan uses `asyncio` with a semaphore — concurrency is controlled by the selected profile (10 / 100 / 1000 simultaneous connections).
-- Full mode (1–65535) can take anywhere from 1 to 20 minutes depending on timeout and network conditions.
-- CVE results are cached in memory for 10 minutes to avoid hammering the NVD rate limit.
-- Screenshots are captured by Playwright in the background and do not block the scan or the audit.
+- Async scan uses `asyncio` + semaphore. Concurrency controlled by profile (10 / 100 / 1000).
+- Full scan (1–65535) can take 1–20 min depending on timeout and network.
+- CVE results cached in memory for 10 min to stay within NVD rate limits.
+- Screenshots are captured by Playwright in the background, don't block anything.
 
 ---
 
 ## License
 
 MIT. See the LICENSE file.
-
----
 
 **Author:** jaimefg1888
 
@@ -212,7 +204,7 @@ MIT. See the LICENSE file.
 
 ## 🇪🇸 Español
 
-# LukitaPort v2.0
+# LukitaPort
 
 Escáner de puertos con interfaz web en tiempo real. El backend en FastAPI va enviando los resultados puerto a puerto según los escanea, sin esperar a que termine todo. Incluye fingerprinting, auditoría de seguridad avanzada, búsqueda de CVEs, descubrimiento de red, enumeración de subdominios, modo anónimo y exportación en múltiples formatos.
 
@@ -224,8 +216,8 @@ Escáner de puertos con interfaz web en tiempo real. El backend en FastAPI va en
 
 LukitaPort abre conexiones TCP contra cada puerto del objetivo y clasifica el resultado:
 
-- **Abierto** — la conexión se estableció. Hay algo escuchando en ese puerto.
-- **Cerrado** — la conexión fue rechazada. El puerto responde pero no hay servicio activo.
+- **Abierto** — la conexión se estableció. Hay algo escuchando.
+- **Cerrado** — la conexión fue rechazada. El puerto responde pero no hay servicio.
 - **Filtrado** — timeout. Probablemente un firewall está descartando los paquetes.
 
 Los resultados llegan al navegador en tiempo real mediante **Server-Sent Events (SSE)** — el backend hace yield de un evento JSON por puerto mientras escanea, y el frontend los va pintando en la tabla según llegan.
@@ -254,53 +246,46 @@ Los resultados llegan al navegador en tiempo real mediante **Server-Sent Events 
 
 ## Modo anónimo
 
-Al activar el **Modo Anónimo** se fuerza automáticamente el perfil **Stealth**, se añaden delays aleatorios entre puertos y se minimiza la huella del escaneo para reducir la probabilidad de detección en redes monitorizadas. Actívalo en el panel de configuración antes de iniciar el escaneo.
+Al activar el **Modo Anónimo** se fuerza el perfil **Stealth** y se añaden delays aleatorios entre puertos para minimizar la huella en redes monitorizadas. Actívalo en el panel de configuración antes de iniciar el escaneo.
 
 ---
 
 ## Niveles de riesgo
 
-Los puertos abiertos se etiquetan según su riesgo potencial:
-
-- **Alto** — protocolos con historial de vulnerabilidades críticas: FTP (21), Telnet (23), SMTP (25), POP3 (110), NetBIOS (139), SMB (445), MSSQL (1433), Oracle (1521), MySQL (3306), RDP (3389), PostgreSQL (5432), VNC (5900), Redis (6379), MongoDB (27017), PPTP (1723).
-- **Medio** — servicios que conviene vigilar: SSH (22), DNS (53), RPC (111), MSRPC (135), IMAP (143), HTTP-Alt (8080/8888), Elasticsearch (9200).
-- **Bajo** — servicios web estándar: HTTP (80), HTTPS (443), SMTPS (465), SMTP/TLS (587), IMAPS (993), POP3S (995), HTTPS-Alt (8443).
+- **Alto** — FTP (21), Telnet (23), SMTP (25), POP3 (110), NetBIOS (139), SMB (445), MSSQL (1433), Oracle (1521), MySQL (3306), RDP (3389), PostgreSQL (5432), VNC (5900), Redis (6379), MongoDB (27017), PPTP (1723).
+- **Medio** — SSH (22), DNS (53), RPC (111), MSRPC (135), IMAP (143), HTTP-Alt (8080/8888), Elasticsearch (9200).
+- **Bajo** — HTTP (80), HTTPS (443), SMTPS (465), SMTP/TLS (587), IMAPS (993), POP3S (995), HTTPS-Alt (8443).
 
 ---
 
 ## Fingerprinting
 
-Haz clic en **Fingerprinting** tras completar el escaneo para ejecutar la detección de versiones de nmap (`-sV`) sobre todos los puertos abiertos. Esto enriquece la columna **Versión / Banner** con nombres de producto y número de versión (p. ej. `Pure-FTPd`, `nginx`, `Dovecot imapd`), que luego usa la búsqueda de CVEs para obtener resultados más precisos.
+Haz clic en **Fingerprinting** tras el escaneo para ejecutar `-sV` de nmap sobre todos los puertos abiertos. Rellena la columna Versión/Banner y mejora los resultados del CVE.
 
-> nmap debe estar instalado en el sistema: `sudo apt install nmap` (Linux) o `winget install Insecure.Nmap` (Windows).
+> Requiere nmap: `sudo apt install nmap` (Linux) · `winget install Insecure.Nmap` (Windows).
 
 ---
 
 ## Auditoría avanzada
 
-Tras el escaneo, si se detecta algún puerto web abierto (80, 443, 8080, 8443), el panel de **Auditoría Avanzada** aparece automáticamente con cinco pestañas:
+Tras el escaneo, si hay algún puerto web abierto (80, 443, 8080, 8443), aparece el panel de **Auditoría Avanzada** con cinco pestañas:
 
 ### 🔒 Cabeceras HTTP
-Audita las cabeceras de seguridad del objetivo. Cada cabecera ausente se clasifica por severidad (Alto / Medio / Bajo) e incluye una directiva nginx lista para copiar y aplicar. Una puntuación final (0–100) y letra (A–F) resume el estado global.
+Audita las cabeceras de seguridad. Cada cabecera ausente incluye severidad y directiva nginx para copiar. Puntuación 0–100 y nota A–F.
 
 ### 🔬 Tecnologías
-Detecta tecnologías web mediante automatización del navegador con Playwright: CMS, frameworks, servidores web, CDNs, analítica, plataformas de e-commerce. Los resultados se agrupan por categoría.
+Detecta CMS, frameworks, servidores web, CDNs, analítica y plataformas de e-commerce con Playwright. Resultados agrupados por categoría.
 
 ### 🗂 Rutas sensibles
-Comprueba una lista de rutas conocidas (paneles de administración, backups, archivos de configuración, etc.) e informa de cuáles devuelven 200 OK (accesibles públicamente) y cuáles 403 Forbidden (existen pero están bloqueadas), con etiquetas de severidad.
+Comprueba rutas conocidas (paneles de admin, backups, configs…). Informa de 200 OK vs 403 Forbidden, con etiquetas de severidad.
 
 ### 🔐 SSL/TLS
-Para los puertos HTTPS abiertos (443, 8443), analiza el certificado y la configuración de cifrado:
-- Validez del certificado, fecha de expiración, días restantes
-- Sujeto / Emisor / SANs
-- Nombre del cifrado, versión del protocolo, bits de la clave
-- Detecta: certificados expirados, próximos a expirar (<30 días), autofirmados, cifrados débiles (RC4, DES, NULL…), protocolos deprecados (SSLv2/3, TLS 1.0/1.1)
-- Nota final: A / B / C / F
+Analiza el certificado y el cifrado en puertos HTTPS. Detecta certificados expirados, autofirmados, cifrados débiles (RC4, DES…), protocolos obsoletos (SSLv2/3, TLS 1.0/1.1). Nota: A/B/C/F.
 
 ### 🐛 CVE
-Consulta el NVD (National Vulnerability Database) en busca de CVEs conocidos que afecten a los servicios detectados. Ejecuta Fingerprinting primero para obtener resultados precisos basados en versión; o haz clic en **Buscar CVEs ahora** para lanzarlo directamente contra los nombres de servicio. Los resultados se ordenan por puntuación CVSS e incluyen severidad, descripción y enlace directo al NVD.
+Consulta el NVD en busca de CVEs conocidos. Ejecuta Fingerprinting primero para resultados precisos, o haz clic en **Buscar CVEs ahora**.
 
-> La API gratuita del NVD permite 1 petición cada 6 segundos. Con 13 puertos abiertos, espera ~85 segundos. Los resultados se cachean durante 10 minutos.
+> NVD gratuito: 1 petición cada 6 segundos. 13 puertos ≈ 85 segundos. Caché de 10 min.
 
 ---
 
@@ -309,16 +294,16 @@ Consulta el NVD (National Vulnerability Database) en busca de CVEs conocidos que
 Panel situado bajo la configuración del escaneo:
 
 ### Ping Sweep (CIDR)
-Introduce un rango CIDR (p. ej. `192.168.1.0/24`) para descubrir hosts activos en la red. Haz clic en cualquier resultado para cargarlo como objetivo del escaneo.
+Introduce un rango CIDR (p. ej. `192.168.1.0/24`) para descubrir hosts activos. Haz clic en cualquier resultado para cargarlo como objetivo.
 
 ### Enumeración de subdominios
-Introduce un dominio para enumerar sus subdominios consultando los logs de transparencia de certificados de crt.sh. Los resultados muestran el subdominio, la IP resuelta (si la hay), la fecha de expiración del certificado y un botón para escanearlo directamente.
+Introduce un dominio para enumerar subdominios vía crt.sh. Muestra el subdominio, IP resuelta, expiración del certificado y botón para escanearlo.
 
 ---
 
 ## Enriquecimiento GeoIP
 
-Durante el escaneo, la IP del objetivo se enriquece automáticamente con datos de geolocalización y ASN (país, ciudad, ISP, número AS), que se muestran en la barra de estado.
+La IP del objetivo se enriquece automáticamente con país, ciudad, ISP y ASN durante el escaneo, visible en la barra de estado.
 
 ---
 
@@ -329,8 +314,8 @@ Durante el escaneo, la IP del objetivo se enriquece automáticamente con datos d
 | JSON | Cliente | Datos completos + metadatos + GeoIP + versiones |
 | CSV | Cliente | Puerto, estado, servicio, riesgo, tiempo, versión |
 | HTML | Cliente | Informe visual autocontenido |
-| PDF | Servidor (ReportLab) | Informe formateado con datos de auditoría y screenshot opcional |
-| Markdown | Servidor | Informe en formato .md para documentación |
+| PDF | Servidor (ReportLab) | Informe formateado con auditoría + screenshot |
+| Markdown | Servidor | Informe .md para documentación |
 
 ---
 
@@ -338,26 +323,26 @@ Durante el escaneo, la IP del objetivo se enriquece automáticamente con datos d
 
 ```
 LukitaPort/
-├── main.py              # Servidor FastAPI — todos los endpoints de la API
-├── scanner.py           # Escaneo async, captura de banners, fingerprinting nmap
-├── resolver.py          # Resolución DNS y validación de IP
-├── auditor.py           # Cabeceras HTTP, WAF, tecnologías, rutas sensibles
-├── ssl_analyzer.py      # Análisis de certificado SSL/TLS y cifrado
-├── cve_lookup.py        # Búsqueda de CVEs en NVD con HTTP async y caché TTL
-├── pdf_generator.py     # Generación de informes PDF (ReportLab)
+├── main.py
+├── scanner.py
+├── resolver.py
+├── auditor.py
+├── ssl_analyzer.py
+├── cve_lookup.py
+├── pdf_generator.py
 ├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
 ├── LICENSE
 ├── README.md
 └── frontend/
-    ├── index.html       # Interfaz principal
-    ├── styles.css       # Estilos tema oscuro
-    ├── main.js          # Punto de entrada — listeners de eventos
-    ├── api.js           # SSE scan, fingerprint, auditoría, CVE, discover, subdominios
-    ├── ui.js            # Helpers DOM, renderizado de tabla y auditoría, toasts
-    ├── state.js         # Fuente única de verdad — estado compartido de la app
-    └── export.js        # Exportación JSON, CSV, HTML, PDF, Markdown
+    ├── index.html
+    ├── styles.css
+    ├── main.js
+    ├── api.js
+    ├── ui.js
+    ├── state.js
+    └── export.js
 ```
 
 ---
@@ -386,35 +371,32 @@ playwright install chromium --with-deps
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Abre `http://localhost:8000`, escribe la IP o dominio objetivo, elige el modo y perfil, y pulsa **Iniciar Escaneo**. Los resultados aparecen mientras el escaneo avanza.
+Abre `http://localhost:8000`, escribe la IP o dominio, elige el modo y perfil, y pulsa **Iniciar Escaneo**.
 
 ---
 
 ## Docker
 
 ```bash
-docker compose up --build      # primera vez
-docker compose up              # ejecuciones posteriores
-docker compose up -d           # modo desatendido
+docker compose up --build
+docker compose up -d
 ```
 
-Abre `http://localhost:8000`. nmap y Playwright/Chromium están incluidos en la imagen.
+Abre `http://localhost:8000`. nmap y Playwright/Chromium incluidos en la imagen.
 
 ---
 
 ## Notas técnicas
 
-- El escaneo async usa `asyncio` con un semáforo — la concurrencia la controla el perfil seleccionado (10 / 100 / 1000 conexiones simultáneas).
-- El modo completo (1–65535) puede tardar entre 1 y 20 minutos según el timeout y las condiciones de red.
-- Los resultados de CVEs se cachean en memoria durante 10 minutos para no saturar el límite de peticiones del NVD.
-- Los screenshots se capturan con Playwright en background y no bloquean ni el escaneo ni la auditoría.
+- Escaneo async con `asyncio` + semáforo. Concurrencia controlada por el perfil (10 / 100 / 1000).
+- Modo completo (1–65535): entre 1 y 20 minutos según timeout y red.
+- CVEs cacheados en memoria 10 minutos para no superar el límite del NVD.
+- Screenshots con Playwright en background, sin bloquear el escaneo ni la auditoría.
 
 ---
 
 ## Licencia
 
 MIT. Consulta el archivo LICENSE.
-
----
 
 **Autor:** jaimefg1888

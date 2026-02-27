@@ -1,38 +1,20 @@
-"""
-auditor.py — LukitaPort v2.0
-Advanced audit module:
-  - HTTP security headers
-  - Technology detection (Wappalyzer-lite) + WAF detection
-  - Sensitive path scanner
-
-Fixes maintained from previous version:
-  FIX 2 — shared prefetch: one HTTP request for header + tech audit.
-  FIX 4 — async httpx path scanning, no ThreadPoolExecutor.
-"""
-
 import re
 import asyncio
 from typing import Optional
 import httpx
 
 
-# ─── HTTP client ──────────────────────────────────────────────────────────────
-
 def _make_client(timeout: float = 6.0) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         verify=False,
         follow_redirects=True,
         timeout=timeout,
-        headers={"User-Agent": "Mozilla/5.0 (LukitaPort/2.0 Security Audit)"},
+        headers={"User-Agent": "Mozilla/5.0 (LukitaPort Security Audit)"},
         limits=httpx.Limits(max_connections=40, max_keepalive_connections=10),
     )
 
 
-async def _fetch_async(
-    client: httpx.AsyncClient,
-    url: str,
-    timeout: float = 6.0,
-) -> Optional[tuple[int, dict, str]]:
+async def _fetch_async(client: httpx.AsyncClient, url: str, timeout: float = 6.0) -> Optional[tuple[int, dict, str]]:
     try:
         resp = await client.get(url, timeout=timeout)
         return resp.status_code, dict(resp.headers), resp.text[:200_000]
@@ -50,22 +32,16 @@ def _choose_base_url(target: str, open_ports: list) -> str:
     return f"https://{target}"
 
 
-async def _prefetch(
-    target: str,
-    open_ports: list,
-    client: httpx.AsyncClient,
-) -> tuple[str, Optional[tuple[int, dict, str]]]:
+async def _prefetch(target: str, open_ports: list, client: httpx.AsyncClient) -> tuple[str, Optional[tuple[int, dict, str]]]:
     base_url = _choose_base_url(target, open_ports)
-    result = await _fetch_async(client, base_url)
-
+    result   = await _fetch_async(client, base_url)
     if result is None and base_url.startswith("https://"):
         base_url = f"http://{target}"
-        result = await _fetch_async(client, base_url)
-
+        result   = await _fetch_async(client, base_url)
     return base_url, result
 
 
-# ─── 1. HTTP Security Headers ─────────────────────────────────────────────────
+# ─── HTTP Security Headers ─────────────────────────────────────────────────────
 
 SECURITY_HEADERS = {
     "Strict-Transport-Security": {
@@ -120,22 +96,16 @@ SECURITY_HEADERS = {
 }
 
 DANGEROUS_HEADERS = {
-    "Server":             "Reveals server software and version.",
-    "X-Powered-By":      "Reveals backend language/framework.",
-    "X-AspNet-Version":  "Reveals ASP.NET version.",
-    "X-AspNetMvc-Version": "Reveals ASP.NET MVC version.",
+    "Server":               "Reveals server software and version.",
+    "X-Powered-By":         "Reveals backend language/framework.",
+    "X-AspNet-Version":     "Reveals ASP.NET version.",
+    "X-AspNetMvc-Version":  "Reveals ASP.NET MVC version.",
 }
 
 
-def _audit_headers_from_prefetch(
-    base_url: str,
-    prefetch: Optional[tuple[int, dict, str]],
-) -> dict:
+def _audit_headers_from_prefetch(base_url: str, prefetch: Optional[tuple[int, dict, str]]) -> dict:
     if prefetch is None:
-        return {
-            "error": "Could not connect", "url": base_url,
-            "present": [], "missing": [], "dangerous": [], "score": 0,
-        }
+        return {"error": "Could not connect", "url": base_url, "present": [], "missing": [], "dangerous": [], "score": 0}
 
     status, headers, _ = prefetch
     headers_norm = {k.title(): v for k, v in headers.items()}
@@ -144,8 +114,7 @@ def _audit_headers_from_prefetch(
     for header, info in SECURITY_HEADERS.items():
         entry = {
             "header": header, "label": info["label"],
-            "description_es": info["description_es"],
-            "description_en": info["description_en"],
+            "description_es": info["description_es"], "description_en": info["description_en"],
             "severity": info["severity"], "example": info.get("example", ""),
         }
         if header.title() in headers_norm:
@@ -175,119 +144,74 @@ def _audit_headers_from_prefetch(
     }
 
 
-# ─── 2. Technology Detection (+ WAF detection) ───────────────────────────────
-#
-# WAFs added in this version (v2.0):
-#   Cloudflare    — was already present via Server header
-#   AWS WAF/CF    — via x-amz-cf-id / x-amzn-requestid / x-amz-waf headers
-#   Akamai        — via x-akamai-transformed / x-akamai-session-id / x-check-cacheable
-#   Imperva       — via x-iinfo / x-cdn (Imperva) / x-iinfo headers
-#   Sucuri        — via x-sucuri-id / x-sucuri-cache
+# ─── Technology Detection ──────────────────────────────────────────────────────
 
 TECH_PATTERNS = {
-    # ── CMS ───────────────────────────────────────────────────────────────
-    "WordPress":        {"body": [r"wp-content/", r"wp-includes/", r"/wp-json/", r"wordpress"], "headers": {"X-Pingback": r"xmlrpc\.php"}, "icon": "📝", "category": "CMS"},
-    "Joomla":           {"body": [r"/components/com_", r"Joomla!", r"/media/jui/"], "icon": "📝", "category": "CMS"},
-    "Drupal":           {"body": [r"Drupal\.settings", r"/sites/default/files/", r"drupal\.js"], "headers": {"X-Generator": r"Drupal"}, "icon": "📝", "category": "CMS"},
-    # ── E-Commerce ────────────────────────────────────────────────────────
-    "Shopify":          {"body": [r"cdn\.shopify\.com", r"shopify\.com/s/files"], "headers": {"X-Shopify-Stage": r"."}, "icon": "🛍", "category": "E-Commerce"},
-    "WooCommerce":      {"body": [r"woocommerce", r"wc-", r"/wc-api/"], "icon": "🛍", "category": "E-Commerce"},
-    "Magento":          {"body": [r"Mage\.", r"mage/", r"skin/frontend/"], "icon": "🛍", "category": "E-Commerce"},
-    "PrestaShop":       {"body": [r"prestashop", r"/modules/blockcart/"], "headers": {"X-Powered-By": r"PrestaShop"}, "icon": "🛍", "category": "E-Commerce"},
-    # ── JavaScript Frameworks ─────────────────────────────────────────────
-    "React":            {"body": [r"react\.production\.min\.js", r"__REACT_DEVTOOLS", r"data-reactroot"], "icon": "⚛️", "category": "JavaScript Framework"},
-    "Vue.js":           {"body": [r"vue\.min\.js", r"vue\.js", r"__vue__", r"data-v-"], "icon": "💚", "category": "JavaScript Framework"},
-    "Angular":          {"body": [r"angular\.min\.js", r"ng-version=", r"ng-app="], "icon": "🔴", "category": "JavaScript Framework"},
-    "Next.js":          {"body": [r"__NEXT_DATA__", r"/_next/static/"], "icon": "▲", "category": "JavaScript Framework"},
-    "Nuxt.js":          {"body": [r"__nuxt", r"_nuxt/", r"nuxt\.js"], "icon": "💚", "category": "JavaScript Framework"},
-    # ── Libraries / CSS ───────────────────────────────────────────────────
-    "jQuery":           {"body": [r"jquery\.min\.js", r"jquery-[0-9]"], "icon": "🔵", "category": "JavaScript Library"},
-    "Bootstrap":        {"body": [r"bootstrap\.min\.css", r"bootstrap\.min\.js"], "icon": "🅱", "category": "CSS Framework"},
-    "Tailwind CSS":     {"body": [r"tailwind\.css", r"tailwindcss"], "icon": "🌊", "category": "CSS Framework"},
-    # ── Web Servers ───────────────────────────────────────────────────────
-    "Apache":           {"headers": {"Server": r"Apache"}, "icon": "🪶", "category": "Web Server"},
-    "Nginx":            {"headers": {"Server": r"nginx"}, "icon": "🟩", "category": "Web Server"},
-    "IIS":              {"headers": {"Server": r"IIS"}, "icon": "🪟", "category": "Web Server"},
-    # ── CDN ───────────────────────────────────────────────────────────────
-    "Cloudflare":       {"headers": {"Server": r"cloudflare", "CF-Ray": r"."}, "icon": "🌐", "category": "CDN / WAF"},
-    # ── Backend ───────────────────────────────────────────────────────────
-    "PHP":              {"headers": {"X-Powered-By": r"PHP"}, "body": [r"\.php\b"], "icon": "🐘", "category": "Backend Language"},
-    "Python / Django":  {"headers": {"Server": r"WSGIServer|gunicorn|Django"}, "body": [r"csrfmiddlewaretoken"], "icon": "🐍", "category": "Backend Framework"},
-    "Laravel":          {"body": [r"laravel_session", r"Laravel"], "headers": {"Set-Cookie": r"laravel_session"}, "icon": "🔴", "category": "Backend Framework"},
-    "Ruby on Rails":    {"headers": {"Server": r"Passenger"}, "body": [r"rails", r"ActionController"], "icon": "💎", "category": "Backend Framework"},
-    "ASP.NET":          {"headers": {"X-Powered-By": r"ASP\.NET", "X-AspNet-Version": r"."}, "body": [r"__VIEWSTATE"], "icon": "🪟", "category": "Backend Framework"},
-    "Node.js / Express":{"headers": {"X-Powered-By": r"Express"}, "icon": "🟩", "category": "Backend Framework"},
-    # ── Analytics ─────────────────────────────────────────────────────────
-    "Google Analytics": {"body": [r"google-analytics\.com/analytics\.js", r"gtag\(", r"UA-\d+-\d+", r"G-[A-Z0-9]+"], "icon": "📊", "category": "Analytics"},
-    "Google Tag Manager":{"body": [r"googletagmanager\.com/gtm\.js", r"GTM-[A-Z0-9]+"], "icon": "🏷", "category": "Analytics"},
-    "Hotjar":           {"body": [r"hotjar\.com"], "icon": "🔥", "category": "Analytics"},
-    "Matomo":           {"body": [r"matomo\.js", r"piwik\.js"], "icon": "📊", "category": "Analytics"},
-    # ── Chat / Marketing ──────────────────────────────────────────────────
-    "Zendesk":          {"body": [r"zopim\.com", r"zendesk\.com"], "icon": "💬", "category": "Chat"},
-    "Tawk.to":          {"body": [r"tawk\.to"], "icon": "💬", "category": "Chat"},
-    "HubSpot":          {"body": [r"hubspot\.com", r"hs-scripts\.com"], "icon": "🟠", "category": "Marketing"},
-    # ── WAF / Security ────────────────────────────────────────────────────
+    "WordPress":            {"body": [r"wp-content/", r"wp-includes/", r"/wp-json/", r"wordpress"], "headers": {"X-Pingback": r"xmlrpc\.php"}, "icon": "📝", "category": "CMS"},
+    "Joomla":               {"body": [r"/components/com_", r"Joomla!", r"/media/jui/"], "icon": "📝", "category": "CMS"},
+    "Drupal":               {"body": [r"Drupal\.settings", r"/sites/default/files/", r"drupal\.js"], "headers": {"X-Generator": r"Drupal"}, "icon": "📝", "category": "CMS"},
+    "Shopify":              {"body": [r"cdn\.shopify\.com", r"shopify\.com/s/files"], "headers": {"X-Shopify-Stage": r"."}, "icon": "🛍", "category": "E-Commerce"},
+    "WooCommerce":          {"body": [r"woocommerce", r"wc-", r"/wc-api/"], "icon": "🛍", "category": "E-Commerce"},
+    "Magento":              {"body": [r"Mage\.", r"mage/", r"skin/frontend/"], "icon": "🛍", "category": "E-Commerce"},
+    "PrestaShop":           {"body": [r"prestashop", r"/modules/blockcart/"], "headers": {"X-Powered-By": r"PrestaShop"}, "icon": "🛍", "category": "E-Commerce"},
+    "React":                {"body": [r"react\.production\.min\.js", r"__REACT_DEVTOOLS", r"data-reactroot"], "icon": "⚛️", "category": "JavaScript Framework"},
+    "Vue.js":               {"body": [r"vue\.min\.js", r"vue\.js", r"__vue__", r"data-v-"], "icon": "💚", "category": "JavaScript Framework"},
+    "Angular":              {"body": [r"angular\.min\.js", r"ng-version=", r"ng-app="], "icon": "🔴", "category": "JavaScript Framework"},
+    "Next.js":              {"body": [r"__NEXT_DATA__", r"/_next/static/"], "icon": "▲", "category": "JavaScript Framework"},
+    "Nuxt.js":              {"body": [r"__nuxt", r"_nuxt/", r"nuxt\.js"], "icon": "💚", "category": "JavaScript Framework"},
+    "jQuery":               {"body": [r"jquery\.min\.js", r"jquery-[0-9]"], "icon": "🔵", "category": "JavaScript Library"},
+    "Bootstrap":            {"body": [r"bootstrap\.min\.css", r"bootstrap\.min\.js"], "icon": "🅱", "category": "CSS Framework"},
+    "Tailwind CSS":         {"body": [r"tailwind\.css", r"tailwindcss"], "icon": "🌊", "category": "CSS Framework"},
+    "Apache":               {"headers": {"Server": r"Apache"}, "icon": "🪶", "category": "Web Server"},
+    "Nginx":                {"headers": {"Server": r"nginx"}, "icon": "🟩", "category": "Web Server"},
+    "IIS":                  {"headers": {"Server": r"IIS"}, "icon": "🪟", "category": "Web Server"},
+    "Cloudflare":           {"headers": {"Server": r"cloudflare", "CF-Ray": r"."}, "icon": "🌐", "category": "CDN / WAF"},
+    "PHP":                  {"headers": {"X-Powered-By": r"PHP"}, "body": [r"\.php\b"], "icon": "🐘", "category": "Backend Language"},
+    "Python / Django":      {"headers": {"Server": r"WSGIServer|gunicorn|Django"}, "body": [r"csrfmiddlewaretoken"], "icon": "🐍", "category": "Backend Framework"},
+    "Laravel":              {"body": [r"laravel_session", r"Laravel"], "headers": {"Set-Cookie": r"laravel_session"}, "icon": "🔴", "category": "Backend Framework"},
+    "Ruby on Rails":        {"headers": {"Server": r"Passenger"}, "body": [r"rails", r"ActionController"], "icon": "💎", "category": "Backend Framework"},
+    "ASP.NET":              {"headers": {"X-Powered-By": r"ASP\.NET", "X-AspNet-Version": r"."}, "body": [r"__VIEWSTATE"], "icon": "🪟", "category": "Backend Framework"},
+    "Node.js / Express":    {"headers": {"X-Powered-By": r"Express"}, "icon": "🟩", "category": "Backend Framework"},
+    "Google Analytics":     {"body": [r"google-analytics\.com/analytics\.js", r"gtag\(", r"UA-\d+-\d+", r"G-[A-Z0-9]+"], "icon": "📊", "category": "Analytics"},
+    "Google Tag Manager":   {"body": [r"googletagmanager\.com/gtm\.js", r"GTM-[A-Z0-9]+"], "icon": "🏷", "category": "Analytics"},
+    "Hotjar":               {"body": [r"hotjar\.com"], "icon": "🔥", "category": "Analytics"},
+    "Matomo":               {"body": [r"matomo\.js", r"piwik\.js"], "icon": "📊", "category": "Analytics"},
+    "Zendesk":              {"body": [r"zopim\.com", r"zendesk\.com"], "icon": "💬", "category": "Chat"},
+    "Tawk.to":              {"body": [r"tawk\.to"], "icon": "💬", "category": "Chat"},
+    "HubSpot":              {"body": [r"hubspot\.com", r"hs-scripts\.com"], "icon": "🟠", "category": "Marketing"},
     "AWS WAF / CloudFront": {
-        "headers": {
-            "X-Amz-Cf-Id":       r".",
-            "X-Amzn-Requestid":  r".",
-            "X-Amz-Waf-Action":  r".",
-            "X-Cache":           r"CloudFront",
-        },
+        "headers": {"X-Amz-Cf-Id": r".", "X-Amzn-Requestid": r".", "X-Amz-Waf-Action": r".", "X-Cache": r"CloudFront"},
         "body": [r"AmazonWAF", r"Request blocked by AWS WAF"],
         "icon": "🛡", "category": "WAF",
     },
     "Akamai": {
-        "headers": {
-            "X-Akamai-Transformed":  r".",
-            "X-Akamai-Session-Id":   r".",
-            "X-Check-Cacheable":     r".",
-            "X-True-Cache-Key":      r".",
-            "Akamai-Cache-Status":   r".",
-        },
+        "headers": {"X-Akamai-Transformed": r".", "X-Akamai-Session-Id": r".", "X-Check-Cacheable": r".", "X-True-Cache-Key": r".", "Akamai-Cache-Status": r"."},
         "body": [r"akamai\.net", r"Reference\s#\d+\.\d+\.\d+"],
         "icon": "🛡", "category": "WAF",
     },
     "Imperva / Incapsula": {
-        "headers": {
-            "X-Iinfo":        r".",
-            "X-Cdn":          r"[Ii]mperva|[Ii]ncapsula",
-            "X-Incap-Ses":    r".",
-            "Set-Cookie":     r"incap_ses|visid_incap",
-        },
+        "headers": {"X-Iinfo": r".", "X-Cdn": r"[Ii]mperva|[Ii]ncapsula", "X-Incap-Ses": r".", "Set-Cookie": r"incap_ses|visid_incap"},
         "body": [r"incapsula incident id", r"Powered by Incapsula"],
         "icon": "🛡", "category": "WAF",
     },
     "Sucuri": {
-        "headers": {
-            "X-Sucuri-Id":    r".",
-            "X-Sucuri-Cache": r".",
-            "Server":         r"Sucuri/Cloudproxy",
-        },
+        "headers": {"X-Sucuri-Id": r".", "X-Sucuri-Cache": r".", "Server": r"Sucuri/Cloudproxy"},
         "body": [r"sucuri\.net", r"Access Denied - Sucuri Website Firewall"],
         "icon": "🛡", "category": "WAF",
     },
     "ModSecurity": {
-        "body": [r"Mod_Security|mod_security|NOYB"],
-        "headers": {"Server": r"[Mm]od.?[Ss]ecurity"},
+        "body": [r"Mod_Security|mod_security|NOYB"], "headers": {"Server": r"[Mm]od.?[Ss]ecurity"},
         "icon": "🛡", "category": "WAF",
     },
     "F5 BIG-IP ASM": {
-        "headers": {
-            "Set-Cookie": r"BIGipServer|TS[0-9a-f]{8}",
-            "Server":     r"BigIP|BIG-IP",
-        },
+        "headers": {"Set-Cookie": r"BIGipServer|TS[0-9a-f]{8}", "Server": r"BigIP|BIG-IP"},
         "body": [r"The requested URL was rejected"],
         "icon": "🛡", "category": "WAF",
     },
 }
 
 
-async def _detect_technologies_from_prefetch(
-    base_url: str,
-    prefetch: Optional[tuple[int, dict, str]],
-    client: httpx.AsyncClient,
-) -> dict:
+async def _detect_technologies_from_prefetch(base_url: str, prefetch: Optional[tuple[int, dict, str]], client: httpx.AsyncClient) -> dict:
     if prefetch is None:
         return {"error": "Could not connect", "url": base_url, "technologies": []}
 
@@ -300,7 +224,7 @@ async def _detect_technologies_from_prefetch(
             extra_body += r[2]
             break
 
-    full_body = body + extra_body
+    full_body    = body + extra_body
     headers_norm = {k.lower(): v for k, v in headers.items()}
 
     gen_match = (
@@ -314,7 +238,7 @@ async def _detect_technologies_from_prefetch(
     if generator:
         gen_lower = generator.lower()
         ver_m = re.search(r'\d[\d.]*', generator)
-        ver = ver_m.group() if ver_m else ""
+        ver   = ver_m.group() if ver_m else ""
         for cms in ("wordpress", "joomla", "drupal"):
             if cms in gen_lower:
                 detected.append({"name": cms.capitalize(), "icon": "📝", "category": "CMS", "version": ver})
@@ -345,7 +269,7 @@ async def _detect_technologies_from_prefetch(
     }
 
 
-# ─── 3. Sensitive Path Scanner ────────────────────────────────────────────────
+# ─── Sensitive Path Scanner ────────────────────────────────────────────────────
 
 SENSITIVE_PATHS = [
     ("/robots.txt",        "Robots.txt",          "info",   "Puede revelar rutas ocultas / Can reveal hidden paths"),
@@ -381,11 +305,7 @@ SENSITIVE_PATHS = [
 ]
 
 
-async def _scan_sensitive_paths_async(
-    base_url: str,
-    client: httpx.AsyncClient,
-    timeout: float = 4.0,
-) -> dict:
+async def _scan_sensitive_paths_async(base_url: str, client: httpx.AsyncClient, timeout: float = 4.0) -> dict:
     async def check_one(path_tuple: tuple) -> Optional[dict]:
         path, label, severity, description = path_tuple
         url = base_url.rstrip("/") + path
@@ -405,33 +325,25 @@ async def _scan_sensitive_paths_async(
             pass
         return None
 
-    raw = await asyncio.gather(
-        *[asyncio.create_task(check_one(pt)) for pt in SENSITIVE_PATHS],
-        return_exceptions=True,
-    )
+    raw = await asyncio.gather(*[asyncio.create_task(check_one(pt)) for pt in SENSITIVE_PATHS], return_exceptions=True)
 
     found, not_found, errors = [], 0, 0
     for r in raw:
-        if isinstance(r, Exception):
-            errors += 1
-        elif r is None:
-            not_found += 1
-        else:
-            found.append(r)
+        if isinstance(r, Exception): errors += 1
+        elif r is None:              not_found += 1
+        else:                        found.append(r)
 
-    order = {"high": 0, "medium": 1, "info": 2}
-    found.sort(key=lambda x: order.get(x["severity"], 9))
+    found.sort(key=lambda x: {"high": 0, "medium": 1, "info": 2}.get(x["severity"], 9))
 
     return {
-        "base_url": base_url, "found": found,
-        "not_found": not_found, "errors": errors,
+        "base_url": base_url, "found": found, "not_found": not_found, "errors": errors,
         "high_count":   sum(1 for f in found if f["severity"] == "high"   and f["accessible"]),
         "medium_count": sum(1 for f in found if f["severity"] == "medium" and f["accessible"]),
-        "total_found": len(found),
+        "total_found":  len(found),
     }
 
 
-# ─── Public entry point ───────────────────────────────────────────────────────
+# ─── Public entry point ────────────────────────────────────────────────────────
 
 async def run_full_audit(target: str, open_ports: list) -> dict:
     async with _make_client() as client:
@@ -442,8 +354,4 @@ async def run_full_audit(target: str, open_ports: list) -> dict:
             _scan_sensitive_paths_async(base_url, client),
         )
 
-    return {
-        "headers":      headers_result,
-        "technologies": tech_result,
-        "paths":        paths_result,
-    }
+    return {"headers": headers_result, "technologies": tech_result, "paths": paths_result}

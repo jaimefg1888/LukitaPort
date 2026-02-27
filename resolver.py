@@ -17,29 +17,10 @@ def resolve_target(target: str) -> dict:
             hostname = socket.gethostbyaddr(target)[0]
         except socket.herror:
             hostname = None
-        return {
-            "input": target,
-            "ip": target,
-            "hostname": hostname,
-            "resolved": False,
-            "error": None,
-        }
+        return {"input": target, "ip": target, "hostname": hostname, "resolved": False, "error": None}
 
-    # domain — try to resolve it
     try:
         ip = socket.gethostbyname(target)
-        return {
-            "input": target,
-            "ip": ip,
-            "hostname": target,
-            "resolved": True,
-            "error": None,
-        }
+        return {"input": target, "ip": ip, "hostname": target, "resolved": True, "error": None}
     except socket.gaierror as e:
-        return {
-            "input": target,
-            "ip": None,
-            "hostname": None,
-            "resolved": False,
-            "error": str(e),
-        }
+        return {"input": target, "ip": None, "hostname": None, "resolved": False, "error": str(e)}
