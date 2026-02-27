@@ -1,18 +1,21 @@
 import json
 from fastapi import FastAPI, Query
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 
 from resolver import resolve_target
-from scanner import scan_ports_stream, get_port_range
+from scanner import scan_ports_stream, get_port_range, fingerprint_ports
+from auditor import audit_headers, detect_technologies, scan_sensitive_paths
 
 app = FastAPI(title="LukitaPort", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -41,7 +44,8 @@ def scan(
 
     if resolution["error"] or not resolution["ip"]:
         def error_stream():
-            yield f"data: {json.dumps({'error': f'Could not resolve target: {resolution[\"error\"]}'})}\n\n"
+            err_msg = resolution["error"]
+            yield f"data: {json.dumps({'error': f'Could not resolve target: {err_msg}'})}\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     ip = resolution["ip"]
@@ -55,6 +59,7 @@ def scan(
             "resolved": resolution["resolved"],
             "total_ports": len(ports),
             "mode": mode,
+            "input": target,
         }
         yield f"data: {json.dumps(meta)}\n\n"
 
@@ -68,3 +73,106 @@ def scan(
         yield f"data: {json.dumps({'type': 'done', 'open_ports': open_count, 'total_scanned': len(ports)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/fingerprint")
+def fingerprint(
+    target: str = Query(...),
+    ports: str = Query(...),  # comma-separated: "80,443,22"
+    timeout: float = Query(5.0, ge=1.0, le=30.0),
+):
+    """Detecta versiones de servicio con nmap en los puertos especificados."""
+    resolution = resolve_target(target)
+    if resolution["error"] or not resolution["ip"]:
+        return {"error": f"Could not resolve: {resolution['error']}", "results": {}}
+
+    port_list = []
+    for p in ports.split(","):
+        try:
+            port_list.append(int(p.strip()))
+        except ValueError:
+            pass
+
+    if not port_list:
+        return {"error": "No valid ports provided", "results": {}}
+
+    results = fingerprint_ports(resolution["ip"], port_list, timeout)
+    return {"ip": resolution["ip"], "results": results}
+
+
+@app.get("/api/audit")
+def audit(
+    target: str = Query(...),
+    open_ports: str = Query("80,443"),  # comma-separated
+):
+    """Auditoría avanzada: cabeceras HTTP, tecnologías y rutas sensibles."""
+    resolution = resolve_target(target)
+    if resolution["error"] or not resolution["ip"]:
+        return {"error": f"Could not resolve: {resolution['error']}"}
+
+    ports = []
+    for p in open_ports.split(","):
+        try:
+            ports.append(int(p.strip()))
+        except ValueError:
+            pass
+
+    ip = resolution["ip"]
+    hostname = resolution["hostname"] or target
+
+    headers_result = audit_headers(hostname, ports)
+    tech_result    = detect_technologies(hostname, ports)
+    paths_result   = scan_sensitive_paths(hostname, ports)
+
+    return {
+        "target": target,
+        "ip": ip,
+        "headers": headers_result,
+        "technologies": tech_result,
+        "paths": paths_result,
+    }
+
+
+# ─── PDF export ───────────────────────────────────────────────────────────────
+
+class ScanData(BaseModel):
+    meta: dict
+    results: list
+    summary: dict
+
+
+class ExportRequest(BaseModel):
+    scan: ScanData
+    audit: Optional[dict] = None
+
+
+@app.post("/api/export/pdf")
+def export_pdf(payload: ExportRequest):
+    """Genera un informe PDF profesional con los resultados del escaneo."""
+    try:
+        from pdf_generator import generate_pdf
+        pdf_bytes = generate_pdf(
+            scan_data={
+                "meta":    payload.scan.meta,
+                "results": payload.scan.results,
+                "summary": payload.scan.summary,
+            },
+            audit_data=payload.audit,
+        )
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=lukitaport_report.pdf"},
+        )
+    except ImportError:
+        return Response(
+            content=json.dumps({"error": "reportlab not installed. Run: pip install reportlab"}),
+            media_type="application/json",
+            status_code=500,
+        )
+    except Exception as e:
+        return Response(
+            content=json.dumps({"error": str(e)}),
+            media_type="application/json",
+            status_code=500,
+        )

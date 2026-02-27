@@ -37,6 +37,8 @@ def scan_port(ip: str, port: int, timeout: float = 1.0) -> dict:
         "state": "closed",
         "service": get_service(port),
         "response_time_ms": None,
+        "version": None,
+        "banner": None,
     }
 
     try:
@@ -45,16 +47,87 @@ def scan_port(ip: str, port: int, timeout: float = 1.0) -> dict:
         conn = sock.connect_ex((ip, port))
         elapsed = round((time.monotonic() - start) * 1000, 2)
         result["response_time_ms"] = elapsed
-        result["state"] = "open" if conn == 0 else "closed"
+
+        if conn == 0:
+            result["state"] = "open"
+            # Intentar capturar banner básico
+            try:
+                sock.settimeout(0.8)
+                banner_raw = sock.recv(256)
+                banner = banner_raw.decode("utf-8", errors="replace").strip()
+                if banner:
+                    result["banner"] = banner[:120]
+            except Exception:
+                pass
+        else:
+            result["state"] = "closed"
         sock.close()
     except socket.timeout:
-        # timeout = probably firewalled
         result["state"] = "filtered"
         result["response_time_ms"] = round((time.monotonic() - start) * 1000, 2)
     except OSError:
         result["state"] = "filtered"
 
     return result
+
+
+def fingerprint_ports(ip: str, ports: list, timeout: float = 3.0) -> dict:
+    """
+    Usa python-nmap para detectar versiones de servicio en los puertos abiertos.
+    Devuelve dict {port: {version, product, extrainfo, cpe}}
+    Requiere nmap instalado en el sistema.
+    """
+    results = {}
+    try:
+        import nmap
+        import shutil
+        import os
+        import sys
+
+        nm = nmap.PortScanner()
+
+        # En Windows, nmap puede no estar en PATH — buscar rutas comunes
+        if sys.platform == 'win32':
+            win_paths = [
+                r"C:\Program Files (x86)\Nmap\nmap.exe",
+                r"C:\Program Files\Nmap\nmap.exe",
+                r"C:\nmap\nmap.exe",
+            ]
+            nmap_path = shutil.which("nmap")
+            if not nmap_path:
+                for p in win_paths:
+                    if os.path.isfile(p):
+                        nmap_path = p
+                        break
+            if nmap_path:
+                nm = nmap.PortScanner(nmap_search_path=(nmap_path,))
+
+        ports_str = ",".join(str(p) for p in ports)
+        nm.scan(
+            hosts=ip,
+            ports=ports_str,
+            arguments=f"-sV --version-intensity 5 --host-timeout {int(timeout * len(ports))}s -T4"
+        )
+        if ip in nm.all_hosts():
+            for proto in nm[ip].all_protocols():
+                for port in nm[ip][proto]:
+                    svc = nm[ip][proto][port]
+                    results[port] = {
+                        "product":   svc.get("product", ""),
+                        "version":   svc.get("version", ""),
+                        "extrainfo": svc.get("extrainfo", ""),
+                        "cpe":       svc.get("cpe", ""),
+                        "name":      svc.get("name", ""),
+                    }
+    except ImportError:
+        results["_error"] = "nmap_not_installed"
+    except Exception as e:
+        err_str = str(e)
+        if "nmap program was not found" in err_str or "not found in path" in err_str.lower():
+            results["_error"] = "nmap_not_installed"
+        else:
+            results["_error"] = err_str
+    return results
 
 
 def get_port_range(mode: str, port_start: int = None, port_end: int = None) -> list:
