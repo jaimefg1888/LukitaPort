@@ -1,24 +1,118 @@
 // main.js
 // Entry point. Imports all modules and wires up event listeners.
+//
+// CSP compliance changes vs previous version
+// ──────────────────────────────────────────
+// • window.launchCVELookup removed — CVE launch now handled by event delegation.
+// • window._pollScreenshot removed — converted to module-local async function
+//   pollScreenshot() exported for api.js to call directly after screenshot POST.
+// • All inline onclick / onmouseover / onmouseout attributes have been removed
+//   from templates.js / ui.js.  A single delegate on document.body intercepts
+//   data-action clicks for: "copy", "launch-cve", "scan-host".
+//
+// Event delegation contract
+// ─────────────────────────
+// Any element anywhere in the document (including dynamically injected HTML)
+// can trigger an action by setting data-action on itself or a parent.
+// The delegate uses Element.closest() to find the nearest action element,
+// so it works for both the element itself and nested children (e.g. <span>
+// inside a <button data-action="copy">).
+//
+//   data-action="copy"
+//       data-copy-text="{text}"        Copy text to clipboard.
+//
+//   data-action="launch-cve"           Run CVE batch lookup.
+//
+//   data-action="scan-host"
+//       data-host="{ip|hostname}"      Load host into target input & focus.
+//
+// Adding a new action in the future: add the data-action attr in templates.js
+// and add a case in the _ACTION_HANDLERS map below.  Zero changes to main.js
+// boilerplate needed.
 
-import { state, initConfig }   from './state.js';
-import { $, initLegal, applyLang, renderHistory, setDotBlink,
-         updateSummary, showError, renderTable }  from './ui.js';
+import { state, initConfig }                         from './state.js';
+import { $, initLegal, initDelegationStyles, applyLang,
+         renderHistory, setDotBlink, updateSummary,
+         showError, renderTable, copyText }           from './ui.js';
 import { startScan, stopScan, runFingerprint,
          launchAudit, launchDiscover, launchSubdomains,
-         cleanTarget, launchCVELookup }           from './api.js';
+         cleanTarget, launchCVELookup }               from './api.js';
 import { exportJSON, exportCSV, exportHTMLReport,
-         exportPDF, exportMarkdown }              from './export.js';
-
-// Expose CVE function globally for inline onclick handlers
-window.launchCVELookup = launchCVELookup;
+         exportPDF, exportMarkdown }                  from './export.js';
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 (async () => {
-    await initConfig();   // Fetch PORT_RISK from backend before anything renders
+    await initConfig();         // Fetch PORT_RISK from backend before renders
     initLegal();
+    initDelegationStyles();     // Inject CSS for dynamic component hover states
     renderHistory();
 })();
+
+// ── Global event delegation ───────────────────────────────────────────────────
+/**
+ * _ACTION_HANDLERS — map from data-action value to handler function.
+ *
+ * Each handler receives (element, event) where element is the closest
+ * ancestor that has a [data-action] attribute.
+ *
+ * This is the single authoritative list of all delegated actions.
+ * To add a new action: add an entry here + set data-action on the element.
+ */
+const _ACTION_HANDLERS = {
+
+    /**
+     * "copy" — copy data-copy-text to clipboard.
+     * Delegates to copyText() from ui.js (not on window).
+     */
+    'copy': (el) => {
+        const text = el.dataset.copyText;
+        if (text !== undefined) copyText(text, el);
+    },
+
+    /**
+     * "launch-cve" — trigger the CVE batch lookup.
+     * Replaces: onclick="window.launchCVELookup && window.launchCVELookup()"
+     */
+    'launch-cve': () => {
+        launchCVELookup();
+    },
+
+    /**
+     * "scan-host" — load an IP or hostname into the target input and focus.
+     * Replaces: onclick="document.getElementById('target').value='${ip}';..."
+     * Used by discover host cards and subdomain scan buttons.
+     */
+    'scan-host': (el) => {
+        const host = el.dataset.host;
+        if (!host) return;
+        const targetInput = $('target');
+        targetInput.value = host;
+        targetInput.style.borderColor = '';
+        targetInput.dispatchEvent(new Event('input'));
+        targetInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        targetInput.focus();
+    },
+};
+
+/**
+ * Single delegated click handler on document.body.
+ *
+ * Performance note: one listener on body is faster than N listeners on
+ * dynamically-created elements and eliminates the need to remove/add listeners
+ * when content is replaced via innerHTML.  The Element.closest() call is O(depth)
+ * and negligible for typical DOM trees.
+ */
+document.body.addEventListener('click', e => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+
+    const action  = el.dataset.action;
+    const handler = _ACTION_HANDLERS[action];
+    if (handler) {
+        e.stopPropagation();
+        handler(el, e);
+    }
+});
 
 // ── Language toggle ────────────────────────────────────────────────────────────
 $('lang-btn').addEventListener('click', () => {
@@ -127,20 +221,41 @@ $('subdomain-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') launchSubdomains();
 });
 
-// ── Screenshot poll ────────────────────────────────────────────────────────────
-window._pollScreenshot = async function (target) {
-    await new Promise(r => setTimeout(r, 12000));
+// ── Screenshot polling ────────────────────────────────────────────────────────
+/**
+ * pollScreenshot — wait for a backend screenshot and render it when ready.
+ *
+ * Previously lived on window._pollScreenshot (CSP violation).
+ * Now a module-level async function exported so api.js can call it
+ * directly after triggering the capture POST.
+ *
+ * @param {string} target  Hostname or IP passed to /api/screenshot
+ */
+export async function pollScreenshot(target) {
+    await new Promise(r => setTimeout(r, 12_000));
     try {
         const resp = await fetch(`/api/screenshot?target=${encodeURIComponent(target)}`);
         if (resp.status === 200) {
-            const blob   = await resp.blob();
-            const imgUrl = URL.createObjectURL(blob);
-            const pane   = $('pane-screenshot');
+            const blob    = await resp.blob();
+            const imgUrl  = URL.createObjectURL(blob);
+            const pane    = $('pane-screenshot');
             if (pane) {
-                pane.innerHTML = `<div style="padding:20px"><img src="${imgUrl}" style="width:100%;border-radius:4px;border:1px solid #1e1e1e" alt="Screenshot" /></div>`;
+                // img.src is a blob: URL — safe, no XSS risk
+                const img         = document.createElement('img');
+                img.src           = imgUrl;
+                img.alt           = 'Screenshot';
+                img.style.cssText = 'width:100%;border-radius:4px;border:1px solid #1e1e1e';
+
+                const wrapper         = document.createElement('div');
+                wrapper.style.padding = '20px';
+                wrapper.appendChild(img);
+
+                pane.innerHTML = '';
+                pane.appendChild(wrapper);
+
                 const screenshotTab = document.querySelector('.audit-tab[data-pane="screenshot"]');
                 if (screenshotTab) screenshotTab.style.display = 'inline-flex';
             }
         }
-    } catch {}
-};
+    } catch { /* screenshot unavailable — silently ignore */ }
+}

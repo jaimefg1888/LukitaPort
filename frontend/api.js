@@ -1,10 +1,23 @@
 // api.js
 // Handles: EventSource streaming scan, fingerprint, audit, SSL, CVE, discover, subdomains.
+//
+// Memory-safety contract for EventSource:
+// ────────────────────────────────────────
+// Every EventSource is created through _createEventSource() and destroyed
+// through _destroyEventSource().  The destroy function:
+//   1. Nulls out onmessage / onerror / onopen  ← removes internal V8 references
+//   2. Calls .close()                           ← closes TCP connection
+//   3. Nulls state.eventSource                 ← releases the JS object reference
+//
+// Without step 1, the browser's event dispatch machinery can keep a reference
+// to the EventSource alive even after .close(), preventing GC.  Over many
+// successive scans this causes a memory leak.
 
 import { state }     from './state.js';
 import { $, showToast, appendRow, renderTable, updateSummary, setDotBlink,
          showError, saveHistory, renderHistory, renderAudit, renderSSLAudit,
-         renderCVEAudit, renderCVEPlaceholder, renderGeo } from './ui.js';
+         renderCVEAudit, renderCVEPlaceholder, renderGeo,
+         flushAndDrain }  from './ui.js';
 import { tmplDiscoverOutput, tmplSubdomainsOutput, tmplCVELoading } from './templates.js';
 
 // ── Timeout constants (must match backend config) ─────────────────────────────
@@ -12,7 +25,7 @@ const NMAP_BASE_TIMEOUT_SEC   = 20;
 const NMAP_PER_PORT_SEC       = 4;
 
 // ── AbortController manager ──────────────────────────────────────────────────
-// Categorized by action key. Calling getController(key) aborts any previous
+// Categorized by action key.  Calling getController(key) aborts any previous
 // in-flight request for the same action before creating a new one.
 const _controllers = new Map();
 
@@ -39,6 +52,54 @@ export function cleanTarget(raw) {
 
 function getTs()   { return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19); }
 function getSlug() { return (state.scanMeta?.ip ?? 'scan').replace(/\./g, '_'); }
+
+// ── EventSource lifecycle management ─────────────────────────────────────────
+
+/**
+ * _createEventSource — build a new EventSource and store it in state.
+ *
+ * Always call _destroyEventSource() on any existing source first
+ * (startScan() does this automatically).
+ *
+ * @param {string} url  Full URL including query params.
+ * @returns {EventSource}
+ */
+function _createEventSource(url) {
+    const es = new EventSource(url);
+    state.eventSource = es;
+    return es;
+}
+
+/**
+ * _destroyEventSource — hermetically close and dereference an EventSource.
+ *
+ * Three-step shutdown:
+ *  1. Null all handler properties → the EventSource can no longer fire events
+ *     and the browser's internal dispatch table releases its closure references.
+ *  2. Close the underlying HTTP stream → frees TCP/network resources.
+ *  3. Null state.eventSource → removes the last strong JS reference so the
+ *     GC can collect the object.
+ *
+ * Idempotent: safe to call even when state.eventSource is already null.
+ */
+function _destroyEventSource() {
+    const es = state.eventSource;
+    if (!es) return;
+
+    // Step 1 — null all registered handlers first
+    // This is the critical step that prevents listener leaks.
+    // If we called .close() before nulling these, the V8 heap might retain
+    // the EventSource until the next GC cycle via the handler closures.
+    es.onmessage = null;
+    es.onerror   = null;
+    es.onopen    = null;
+
+    // Step 2 — close the connection
+    try { es.close(); } catch (_) {}
+
+    // Step 3 — release the JS reference
+    state.eventSource = null;
+}
 
 // ── Scan (SSE) ────────────────────────────────────────────────────────────────
 export function startScan() {
@@ -92,12 +153,30 @@ export function startScan() {
         anon:       isAnon ? '1' : '0',
     });
 
-    if (state.eventSource) state.eventSource.close();
-    state.eventSource = new EventSource('/api/scan?' + params);
+    // Hermetically destroy any existing EventSource before creating a new one
+    _destroyEventSource();
 
-    state.eventSource.onmessage = e => {
-        const d = JSON.parse(e.data);
-        if (d.error) { showError(d.error); stopScan(); return; }
+    const es = _createEventSource('/api/scan?' + params);
+
+    es.onmessage = e => {
+        let d;
+        try { d = JSON.parse(e.data); } catch { return; }
+
+        // ── SSRF error from backend ───────────────────────────────────────────
+        if (d.error) {
+            const statusCode = d.status || 0;
+            if (statusCode === 403 || d.error === 'ssrf_blocked') {
+                showError(
+                    state.lang === 'es'
+                        ? '⛔ Escaneo bloqueado — IP interna no permitida. Activa ALLOW_PRIVATE_IPS=true para redes privadas.'
+                        : '⛔ Scan blocked — internal IP not allowed. Set ALLOW_PRIVATE_IPS=true for private networks.'
+                );
+            } else {
+                showError(d.error);
+            }
+            stopScan();
+            return;
+        }
 
         if (d.type === 'meta') {
             state.scanMeta = d;
@@ -111,25 +190,35 @@ export function startScan() {
             }
             return;
         }
+
         if (d.type === 'port') {
             state.results.push(d);
             state.counts[d.state]++;
             $('st-scanned').textContent    = d.scanned;
             $('st-open').textContent       = state.counts.open;
             $('progress-fill').style.width = d.progress + '%';
+            // Only queue the row if it matches the active filter
             if (state.filter === 'all' || state.filter === d.state) appendRow(d);
             updateSummary();
             return;
         }
+
         if (d.type === 'done') stopScan(true);
+
+        if (d.type === 'cancelled') stopScan(false);
     };
 
-    state.eventSource.onerror = () => { if (state.scanning) stopScan(); };
+    es.onerror = () => { if (state.scanning) stopScan(); };
 }
 
 export function stopScan(completed = false) {
     state.scanning = false;
-    if (state.eventSource) { state.eventSource.close(); state.eventSource = null; }
+
+    // Flush any rows that were queued but not yet rendered (last batch)
+    flushAndDrain();
+
+    // Hermetic EventSource teardown — null handlers before close
+    _destroyEventSource();
 
     $('btn-scan').querySelector('.es').textContent = 'Iniciar Escaneo';
     $('btn-scan').querySelector('.en').textContent = 'Start Scan';
@@ -167,8 +256,8 @@ export function stopScan(completed = false) {
                 $('audit-panel').classList.add('visible');
                 launchAudit();
 
-                const firstWebPort      = webPorts[0];
-                const screenshotTarget  = state.scanMeta.hostname || state.scanMeta.ip;
+                const firstWebPort     = webPorts[0];
+                const screenshotTarget = state.scanMeta.hostname || state.scanMeta.ip;
                 fetch(`/api/screenshot/capture?target=${encodeURIComponent(screenshotTarget)}&port=${firstWebPort.port}`, { method: 'POST' })
                     .catch(() => {});
             }
@@ -180,6 +269,7 @@ export function stopScan(completed = false) {
             }
         }
     }
+
     if (!state.results.length) {
         const msg = state.lang === 'es' ? 'Sin resultados' : 'No results found';
         $('results-body').innerHTML = `<tr><td colspan="6"><div class="empty-state">[ _ ]<br>${msg}</div></td></tr>`;
@@ -199,7 +289,6 @@ export async function runFingerprint() {
     const target    = state.scanMeta?.input || state.scanMeta?.ip;
     if (!target || !openPorts.length) { btn.disabled = false; statusEl.textContent = ''; return; }
 
-    // Dynamic timeout: base + per-port
     const dynamicTimeout = NMAP_BASE_TIMEOUT_SEC + NMAP_PER_PORT_SEC * openPorts.length;
     const estMsg = state.lang === 'es'
         ? `⟳ Consultando nmap — estimado ~${dynamicTimeout}s...`
@@ -244,7 +333,8 @@ export async function runFingerprint() {
         Object.entries(results).forEach(([portKey, info]) => {
             const p = parseInt(portKey);
             if (isNaN(p)) return;
-            const vStr = [info.product, info.version, info.extrainfo].filter(Boolean).join(' ').trim();
+            const vStr = [info.product, info.version, info.extrainfo].filter(Boolean).join(' ').trim()
+                      || info.banner || '';
             if (vStr) { state.versions[p] = { version: vStr, source: 'nmap', cpe: info.cpe || '' }; updated++; }
         });
 
@@ -284,11 +374,11 @@ export async function launchAudit() {
 
     const allPanes = ['headers', 'technologies', 'paths', 'ssl', 'cve'];
     const texts    = {
-        headers:      { es: 'Auditando cabeceras HTTP...',  en: 'Auditing HTTP headers...' },
-        technologies: { es: 'Detectando tecnologías...',   en: 'Detecting technologies...' },
-        paths:        { es: 'Escaneando rutas sensibles...', en: 'Scanning sensitive paths...' },
-        ssl:          { es: 'Analizando SSL/TLS...',        en: 'Analyzing SSL/TLS...' },
-        cve:          { es: 'Buscando CVEs conocidos...',   en: 'Searching known CVEs...' },
+        headers:      { es: 'Auditando cabeceras HTTP...',    en: 'Auditing HTTP headers...' },
+        technologies: { es: 'Detectando tecnologías...',      en: 'Detecting technologies...' },
+        paths:        { es: 'Escaneando rutas sensibles...',  en: 'Scanning sensitive paths...' },
+        ssl:          { es: 'Analizando SSL/TLS...',          en: 'Analyzing SSL/TLS...' },
+        cve:          { es: 'Buscando CVEs conocidos...',     en: 'Searching known CVEs...' },
     };
     allPanes.forEach(p => {
         $('pane-' + p).innerHTML = `<div class="audit-loading"><span class="spinner"></span>${state.lang === 'es' ? texts[p].es : texts[p].en}</div>`;
@@ -325,8 +415,6 @@ export async function launchAudit() {
             });
         }
         renderSSLAudit(sslData);
-
-        // CVE not auto-launched — show placeholder with manual trigger
         renderCVEPlaceholder();
         statusEl.textContent = '';
     } catch {

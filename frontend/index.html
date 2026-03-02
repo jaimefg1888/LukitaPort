@@ -4,187 +4,7 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>LukitaPort — Port Scanner</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css"/>
-    <style>
-        :root { --font-main:'Inter',sans-serif; --font-mono:'IBM Plex Mono',monospace; }
-
-        @keyframes blink{0%,100%{opacity:1}50%{opacity:.15}}
-        .dot-blink{animation:blink .9s ease-in-out infinite}
-
-        /* Risk badges */
-        .risk{display:inline-block;padding:3px 10px;border-radius:3px;font-size:10px;letter-spacing:.8px;font-family:var(--font-mono);font-weight:600;text-transform:uppercase}
-        .risk-high  {background:rgba(255,0,51,.1); color:#ff2244;border:1px solid rgba(255,0,51,.2)}
-        .risk-medium{background:rgba(255,170,0,.09);color:#ffaa00;border:1px solid rgba(255,170,0,.18)}
-        .risk-low   {background:rgba(0,255,136,.07);color:#00cc66;border:1px solid rgba(0,255,136,.15)}
-        .risk-info  {background:transparent;color:#333;border:1px solid #1e1e1e}
-
-        /* Tab badge pills */
-        .tab-badge-red   {background:rgba(255,0,51,.15);color:#ff4455;font-size:10px;padding:1px 6px;border-radius:2px;font-family:var(--font-mono)}
-        .tab-badge-blue  {background:rgba(100,100,255,.1);color:#8899ff;font-size:10px;padding:1px 6px;border-radius:2px;font-family:var(--font-mono)}
-        .tab-badge-yellow{background:rgba(255,170,0,.12);color:#ffaa00;font-size:10px;padding:1px 6px;border-radius:2px;font-family:var(--font-mono)}
-
-        /* Version tag */
-        .version-tag{font-family:var(--font-mono);font-size:11px;color:#555;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
-        .version-tag.loaded{color:#b0c4b0;background:rgba(0,255,136,.04);padding:3px 9px;border-radius:3px;border:1px solid rgba(0,255,136,.15);max-width:240px}
-
-        .col-port{color:#f0f0f0!important;font-size:14px!important;font-weight:700!important;font-family:var(--font-mono)!important}
-        .col-service{color:#dddddd!important;font-family:var(--font-mono);font-size:12px!important}
-        .col-time{font-family:var(--font-mono);font-size:11px}
-
-        /* Shimmer skeleton */
-        @keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
-        .skeleton{background:linear-gradient(90deg,#111 25%,#181818 50%,#111 75%);background-size:400px 100%;animation:shimmer 1.4s ease infinite}
-
-        /* History */
-        .history-item{border-bottom:1px solid rgba(34,34,34,.5);font-family:var(--font-mono);font-size:12px}
-        .history-item:last-child{border-bottom:none}
-        .history-row{display:flex;align-items:center;justify-content:space-between;padding:13px 20px;transition:background .1s;gap:10px;flex-wrap:wrap}
-        .history-row:hover{background:#0c0c0c}
-        .history-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-        .history-target{color:var(--accent);font-weight:600;font-size:13px}
-        .history-meta{color:var(--text-dim);font-size:10px}
-        .history-open{color:var(--green);font-size:11px;padding:2px 8px;background:var(--green-dim);border:1px solid rgba(0,255,136,.15);border-radius:3px}
-        .history-actions{display:flex;align-items:center;gap:7px;flex-shrink:0}
-        .btn-reload,.btn-expand{padding:4px 11px;background:transparent;border:1px solid var(--border-mid);border-radius:3px;color:var(--text-muted);font-family:var(--font-mono);font-size:10px;transition:all .15s;letter-spacing:.5px}
-        .btn-reload:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
-        .btn-expand:hover{border-color:#555;color:var(--text-main)}
-        .btn-expand.active{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
-        .history-detail{max-height:0;overflow:hidden;transition:max-height .35s ease-out;background:#070707;border-top:1px solid rgba(34,34,34,.4)}
-        .history-detail.open{max-height:500px;transition:max-height .4s ease-in}
-        .history-detail-inner{padding:16px 20px}
-        .hd-meta{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px}
-        .hd-meta span{font-size:11px;color:var(--text-dim)}
-        .hd-meta strong{color:#aaa}
-        .hd-label{font-family:var(--font-mono);font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-dim);margin-bottom:10px}
-        .hd-ports{display:flex;flex-wrap:wrap;gap:6px}
-        .hd-port-tag{padding:4px 11px;border-radius:3px;font-size:11px;background:var(--green-dim);color:var(--green);border:1px solid rgba(0,255,136,.15);font-family:var(--font-mono)}
-        .hd-empty{color:var(--text-dim);font-size:11px;padding:4px 0}
-
-        /* Audit panel */
-        .audit-panel{display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;margin-bottom:20px;overflow:hidden}
-        .audit-panel.visible{display:block}
-        .audit-tabs{display:flex;gap:4px;padding:10px 20px;border-bottom:1px solid var(--border);background:#080808;flex-wrap:wrap}
-        .audit-tab{padding:6px 14px;border-radius:3px;border:1px solid transparent;font-family:var(--font-mono);font-size:11px;background:transparent;color:var(--text-muted);transition:all .15s;letter-spacing:.3px}
-        .audit-tab:hover{color:var(--text-main);border-color:var(--border)}
-        .audit-tab.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
-        .audit-pane{display:none;padding:24px}
-        .audit-pane.active{display:block}
-        .audit-loading{text-align:center;padding:40px;font-family:var(--font-mono);font-size:11px;color:var(--text-dim);letter-spacing:.5px}
-        @keyframes spin{to{transform:rotate(360deg)}}
-        .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,0,51,.2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
-
-        /* Header audit styles */
-        .grade-badge{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:4px;font-family:var(--font-mono);font-weight:700;font-size:1.8rem;flex-shrink:0}
-        .grade-A{background:rgba(0,255,136,.1);color:#00ff88;border:1px solid rgba(0,255,136,.3)}
-        .grade-B{background:rgba(0,255,136,.07);color:#44cc88;border:1px solid rgba(0,255,136,.2)}
-        .grade-C{background:rgba(255,170,0,.1);color:#ffaa00;border:1px solid rgba(255,170,0,.3)}
-        .grade-D{background:rgba(255,100,0,.1);color:#ff6600;border:1px solid rgba(255,100,0,.2)}
-        .grade-F{background:rgba(255,0,51,.1);color:#ff0033;border:1px solid rgba(255,0,51,.3)}
-        .grade-row{display:flex;align-items:center;gap:18px;margin-bottom:20px;padding:16px;background:#080808;border:1px solid var(--border);border-radius:4px}
-        .grade-info{display:flex;flex-direction:column;gap:5px}
-        .grade-score{font-family:var(--font-mono);font-size:11px;color:#aaa}
-        .grade-url{font-family:var(--font-mono);font-size:10px;color:#777}
-        .sev-badge{display:inline-block;padding:2px 8px;border-radius:2px;font-size:9px;font-family:var(--font-mono);letter-spacing:.8px;text-transform:uppercase;margin-left:8px;font-weight:700}
-        .sev-high  {background:rgba(255,0,51,.15);color:#ff3355;border:1px solid rgba(255,0,51,.3)}
-        .sev-medium{background:rgba(255,170,0,.12);color:#ffbb00;border:1px solid rgba(255,170,0,.3)}
-        .sev-low   {background:rgba(0,255,136,.1);color:#00dd77;border:1px solid rgba(0,255,136,.25)}
-        .missing-header-card{background:#0a0a0a;border:1px solid #1e1e1e;border-left:3px solid #333;border-radius:4px;padding:14px 18px;margin-bottom:8px;transition:border-color .15s;cursor:default}
-        .missing-header-card.sev-high-card{border-left-color:#ff0033}
-        .missing-header-card.sev-medium-card{border-left-color:#ffaa00}
-        .missing-header-card.sev-low-card{border-left-color:#00bb66}
-        .missing-header-card:hover{background:#0e0e0e}
-        .mhc-top{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-        .mhc-name{font-family:var(--font-mono);font-size:13px;color:#fff;font-weight:700;flex:1}
-        .mhc-desc{font-size:13px;color:#bbb;line-height:1.6;margin-bottom:8px}
-        .mhc-example{font-family:var(--font-mono);font-size:11px;background:#111;border:1px solid #222;border-radius:3px;padding:7px 12px;color:#77cc99;overflow-x:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6;position:relative}
-        .mhc-example-label{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#555;margin-bottom:5px;font-family:var(--font-mono)}
-        .copy-btn{padding:2px 8px;background:transparent;border:1px solid #333;border-radius:3px;color:#666;font-family:var(--font-mono);font-size:9px;cursor:pointer;transition:all .15s;flex-shrink:0}
-        .copy-btn:hover,.copy-btn.copied{border-color:#00ff88;color:#00ff88}
-        .present-header-card{background:#050d05;border:1px solid rgba(0,255,136,.08);border-left:3px solid rgba(0,255,136,.4);border-radius:4px;padding:11px 16px;margin-bottom:6px}
-        .phc-top{display:flex;align-items:flex-start;gap:10px}
-        .phc-name{font-family:var(--font-mono);font-size:12px;color:#00cc66;font-weight:600;flex:1}
-        .phc-val{font-family:var(--font-mono);font-size:11px;color:#777;margin-top:4px;word-break:break-all;line-height:1.5}
-        .danger-card{background:#0a0700;border:1px solid rgba(255,170,0,.15);border-left:3px solid #ffaa00;border-radius:4px;padding:12px 16px;margin-bottom:7px}
-        .danger-card-top{display:flex;align-items:center;gap:8px;margin-bottom:5px}
-        .danger-card-key{font-family:var(--font-mono);font-size:13px;color:#ffcc00;font-weight:700}
-        .danger-card-val{font-family:var(--font-mono);font-size:12px;color:#cc9900;margin-left:4px}
-        .danger-card-desc{font-size:12px;color:#aa8800;line-height:1.5}
-        .danger-card-tip{font-size:11px;color:#777;margin-top:6px;padding:6px 10px;background:rgba(0,0,0,.3);border-radius:3px;border:1px solid #1a1500;font-family:var(--font-mono)}
-        .subsection-label{font-family:var(--font-mono);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#888;margin:18px 0 10px;display:flex;align-items:center;gap:8px}
-        .subsection-label::after{content:'';flex:1;height:1px;background:var(--border)}
-        .tech-list{display:flex;flex-direction:column;gap:3px;margin-bottom:10px}
-        .tech-row{display:flex;align-items:center;gap:14px;padding:11px 16px;background:#0c0c0c;border:1px solid #222;border-radius:4px;transition:border-color .15s}
-        .tech-row:hover{border-color:#333;background:#111}
-        .tech-icon-sm{font-size:18px;flex-shrink:0;width:24px;text-align:center}
-        .tech-name-sm{font-family:var(--font-mono);font-size:13px;color:#ffffff!important;font-weight:600;flex:1}
-        .tech-cat-sm{font-family:var(--font-mono);font-size:10px;color:#777;letter-spacing:.5px;text-transform:uppercase}
-        .no-results{text-align:center;padding:40px;color:#666;font-family:var(--font-mono);font-size:12px;line-height:2.5}
-
-        /* Path cards */
-        .path-card{display:flex;align-items:stretch;border:1px solid #1a1a1a;border-radius:4px;margin-bottom:6px;overflow:hidden;transition:border-color .15s;background:#0a0a0a}
-        .path-card:hover{border-color:#2a2a2a;background:#0d0d0d}
-        .path-card.pc-high{border-left:3px solid rgba(255,0,51,.5)}
-        .path-card.pc-medium{border-left:3px solid rgba(255,170,0,.4)}
-        .path-card.pc-info{border-left:3px solid rgba(100,100,255,.3)}
-        .path-card-status{display:flex;align-items:center;justify-content:center;padding:0 16px;font-family:var(--font-mono);font-size:11px;font-weight:700;flex-shrink:0;min-width:54px;border-right:1px solid #1a1a1a}
-        .pcs-200{color:#00ff88;background:rgba(0,255,136,.05)}
-        .pcs-403{color:#aaaaaa;background:rgba(100,100,100,.05)}
-        .pcs-301,.pcs-302{color:#ffaa00;background:rgba(255,170,0,.05)}
-        .path-card-body{flex:1;padding:11px 16px;min-width:0}
-        .path-card-url{font-family:var(--font-mono);font-size:13px;color:#ffffff;font-weight:600;margin-bottom:3px;word-break:break-all}
-        .path-card-label{font-size:11px;color:#777;font-family:var(--font-mono)}
-        .path-card-desc{font-size:12px;color:#999;margin-top:5px;line-height:1.4}
-        .path-card-right{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;padding:10px 14px;gap:6px;flex-shrink:0}
-        .path-status-tag{padding:2px 8px;border-radius:3px;font-size:9px;font-weight:700;font-family:var(--font-mono);letter-spacing:.5px}
-        .pst-high  {background:rgba(255,0,51,.1);color:#ff3344;border:1px solid rgba(255,0,51,.25)}
-        .pst-medium{background:rgba(255,170,0,.1);color:#ffbb00;border:1px solid rgba(255,170,0,.2)}
-        .pst-info  {background:rgba(100,100,255,.08);color:#8899ff;border:1px solid rgba(100,100,255,.2)}
-        .path-copy-btn{padding:2px 8px;background:transparent;border:1px solid #2a2a2a;border-radius:3px;color:#555;font-family:var(--font-mono);font-size:9px;cursor:pointer;transition:all .15s}
-        .path-copy-btn:hover{border-color:#888;color:#aaa}
-
-        /* Audit stat bar */
-        .audit-stat-bar{display:flex;gap:20px;flex-wrap:wrap;padding:12px 16px;background:#070707;border:1px solid #161616;border-radius:4px;margin-bottom:16px;font-family:var(--font-mono);font-size:11px}
-        .asb-item{display:flex;align-items:center;gap:7px}
-        .asb-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-        .asb-label{color:#666}
-        .asb-num{font-weight:700;font-size:13px}
-
-        /* Fingerprint button */
-        .btn-fingerprint{padding:7px 16px;background:transparent;border:1px solid var(--border-mid);border-radius:4px;color:var(--text-muted);font-family:var(--font-mono);font-size:11px;letter-spacing:.8px;transition:all .2s;display:inline-flex;align-items:center;gap:7px}
-        .btn-fingerprint:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
-        .btn-fingerprint:disabled{opacity:.3;cursor:not-allowed}
-        .btn-fingerprint.running{border-color:var(--accent);color:var(--accent)}
-        .fp-done{border-color:#00ff88!important;color:#00cc66!important}
-        .fp-error{border-color:#ff4444!important;color:#ff4444!important}
-        .fp-status{font-family:var(--font-mono);font-size:11px;color:var(--text-dim);margin-top:6px;text-align:center;min-height:16px}
-
-        /* Toast */
-        #toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;background:#111;border:1px solid var(--border);border-radius:4px;font-family:var(--font-mono);font-size:12px;color:var(--text-main);z-index:9999;transform:translateY(80px);opacity:0;transition:all .3s ease;max-width:320px;line-height:1.5}
-        #toast.show{transform:translateY(0);opacity:1}
-        #toast.toast-error{border-color:var(--accent);color:#ff4466}
-        #toast.toast-ok{border-color:#00ff88;color:#00cc66}
-
-        /* nmap error box */
-        .nmap-error-box{background:#0d0505;border:1px solid rgba(255,0,51,.3);border-radius:4px;padding:16px 20px;font-family:var(--font-mono);font-size:12px;color:#ff8899;line-height:1.9;margin-top:8px}
-        .nmap-error-box strong{color:#ff3344}
-        .nmap-error-box code{background:#1a0808;padding:3px 10px;border-radius:3px;color:#ffaaaa;font-size:12px;display:inline-block;margin:4px 0}
-
-        /* GeoIP badge */
-        #geo-badge{display:none;font-family:var(--font-mono);font-size:10px;color:#666;padding:4px 10px;border:1px solid #1e1e1e;border-radius:3px;background:#080808;gap:5px;align-items:center;letter-spacing:.3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-        /* OSINT section */
-        .osint-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:0}
-        @media(max-width:680px){.osint-grid{grid-template-columns:1fr}}
-        .osint-panel-inner{background:var(--bg-card);border:1px solid var(--border);border-radius:4px;overflow:hidden}
-        .osint-panel-header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#444;background:#080808}
-        .osint-panel-header .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-        .osint-panel-body{padding:16px}
-        .osint-panel-body .form-group{margin-bottom:10px}
-        .osint-output{margin-top:12px;min-height:0}
-    </style>
 </head>
 <body class="es">
 
@@ -210,75 +30,82 @@
 
 <!-- HEADER -->
 <header>
-    <div></div>
+    <div class="logo">Lukita<span>Port</span></div>
     <div class="header-right">
-        <button class="lang-switch" id="lang-btn">🌐 <span id="lang-label">ES</span></button>
+        <button class="lang-switch" id="lang-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            <span id="lang-label">ES</span>
+        </button>
     </div>
 </header>
 
 <main>
-    <div class="page-title">
-        <h1>Lukita<span>Port</span></h1>
-        <p class="es">ESCÁNER DE PUERTOS · USO EDUCATIVO</p>
-        <p class="en">PORT SCANNER · EDUCATIONAL USE ONLY</p>
-    </div>
 
-    <!-- ── Configuración del escaneo ── -->
+    <!-- ── Configuración del escaneo (COMPACT) ── -->
     <div class="panel">
         <div class="panel-header">
             <span class="dot"></span>
-            <span class="es">Configuración del escaneo</span>
-            <span class="en">Scan Configuration</span>
+            <span class="es">Escaneo de Puertos</span>
+            <span class="en">Port Scan</span>
         </div>
-        <div class="panel-body">
-            <div class="form-grid">
-                <div class="form-group full-width">
-                    <label><span class="es">Objetivo — IP o Dominio</span><span class="en">Target — IP or Domain</span></label>
-                    <input type="text" id="target" placeholder="192.168.1.1 · 10.0.0.1 · example.com" autocomplete="off" spellcheck="false"/>
-                </div>
+        <div class="panel-body" style="padding:16px 20px">
+
+            <!-- Target full width -->
+            <div class="scan-target-row">
+                <label><span class="es">Objetivo — IP o Dominio</span><span class="en">Target — IP or Domain</span></label>
+                <input type="text" id="target" placeholder="192.168.1.1 · 10.0.0.1 · example.com" autocomplete="off" spellcheck="false" style="margin-top:7px"/>
+            </div>
+
+            <!-- Options row -->
+            <div class="scan-form-compact">
                 <div class="form-group">
-                    <label><span class="es">Modo de escaneo</span><span class="en">Scan Mode</span></label>
+                    <label><span class="es">Modo</span><span class="en">Mode</span></label>
                     <select id="scan-mode">
-                        <option value="quick"  data-es="Rápido — Puertos comunes (30)"  data-en="Quick — Common ports (30)">Rápido — Puertos comunes (30)</option>
-                        <option value="custom" data-es="Personalizado — Rango definido" data-en="Custom — Defined range">Personalizado — Rango definido</option>
-                        <option value="full"   data-es="Completo — 1-65535 (lento)"     data-en="Full — 1-65535 (slow)">Completo — 1-65535 (lento)</option>
+                        <option value="quick"  data-es="Rápido — 30 puertos"  data-en="Quick — 30 ports">Rápido — 30 puertos</option>
+                        <option value="custom" data-es="Personalizado" data-en="Custom range">Personalizado</option>
+                        <option value="full"   data-es="Completo — 1-65535"     data-en="Full — 1-65535">Completo — 1-65535</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label><span class="es">Perfil de intensidad</span><span class="en">Intensity Profile</span></label>
+                    <label><span class="es">Perfil</span><span class="en">Profile</span></label>
                     <select id="scan-profile">
-                        <option value="normal"     data-es="Normal — Equilibrado"             data-en="Normal — Balanced">Normal — Equilibrado</option>
-                        <option value="stealth"    data-es="Stealth — Evasión de IDS/firewall" data-en="Stealth — IDS/firewall evasion">Stealth — Evasión de IDS</option>
-                        <option value="aggressive" data-es="Agresivo — Máxima velocidad"       data-en="Aggressive — Maximum speed">Agresivo — Máxima velocidad</option>
+                        <option value="normal"     data-es="Normal"     data-en="Normal">Normal</option>
+                        <option value="stealth"    data-es="Stealth"    data-en="Stealth">Stealth</option>
+                        <option value="aggressive" data-es="Agresivo"   data-en="Aggressive">Agresivo</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label><span class="es">Timeout por puerto</span><span class="en">Timeout per port</span></label>
+                    <label><span class="es">Timeout/puerto</span><span class="en">Timeout/port</span></label>
                     <div class="slider-row">
                         <input type="range" id="timeout" min="0.1" max="5" step="0.1" value="1.0"/>
                         <span class="slider-val" id="timeout-val">1.0s</span>
                     </div>
                 </div>
-                <div class="form-group full-width">
-                    <div class="custom-range" id="custom-range">
-                        <div class="form-group"><label><span class="es">Puerto inicio</span><span class="en">Start port</span></label><input type="number" id="port-start" value="1" min="1" max="65535"/></div>
-                        <div class="form-group"><label><span class="es">Puerto fin</span><span class="en">End port</span></label><input type="number" id="port-end" value="1024" min="1" max="65535"/></div>
-                    </div>
+            </div>
+
+            <!-- Custom range (hidden unless custom mode) -->
+            <div class="custom-range" id="custom-range" style="margin-bottom:12px">
+                <div class="form-group">
+                    <label><span class="es">Puerto inicio</span><span class="en">Start port</span></label>
+                    <input type="number" id="port-start" value="1" min="1" max="65535"/>
+                </div>
+                <div class="form-group">
+                    <label><span class="es">Puerto fin</span><span class="en">End port</span></label>
+                    <input type="number" id="port-end" value="1024" min="1" max="65535"/>
                 </div>
             </div>
 
-            <!-- Modo Anónimo -->
-            <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:#080808;border:1px solid #1e1e1e;border-radius:4px;margin-bottom:14px">
-                <label class="anon-toggle" for="anon-mode" style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1">
-                    <div id="anon-dot" style="width:10px;height:10px;border-radius:50%;background:#333;box-shadow:none;transition:all .3s;flex-shrink:0"></div>
-                    <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;color:#555">
-                        <span class="es">🕵️ MODO ANÓNIMO</span>
-                        <span class="en">🕵️ ANONYMOUS MODE</span>
+            <!-- Anon mode compact -->
+            <div class="anon-row">
+                <label class="anon-toggle" for="anon-mode" style="display:flex;align-items:center;gap:9px;cursor:pointer;flex:1">
+                    <div id="anon-dot" style="width:9px;height:9px;border-radius:50%;background:#333;box-shadow:none;transition:all .3s;flex-shrink:0"></div>
+                    <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.5px;color:#555">
+                        🕵️ <span class="es">MODO ANÓNIMO</span><span class="en">ANONYMOUS MODE</span>
                     </span>
                     <input type="checkbox" id="anon-mode" style="display:none"/>
                     <span id="anon-status" style="font-family:var(--font-mono);font-size:10px;color:#333;margin-left:auto">
-                        <span class="es">Desactivado — fuerza perfil Stealth + delays aleatorios</span>
-                        <span class="en">Disabled — forces Stealth profile + random delays</span>
+                        <span class="es">Stealth + delays aleatorios</span>
+                        <span class="en">Stealth + random delays</span>
                     </span>
                 </label>
             </div>
@@ -301,57 +128,6 @@
                     </div>
                 </div>
                 <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ── OSINT & Descubrimiento ── -->
-    <div class="panel" style="margin-top:18px">
-        <div class="panel-header">
-            <span class="dot" style="background:#8866ff;box-shadow:0 0 6px rgba(136,102,255,.4)"></span>
-            <span class="es">OSINT &amp; Descubrimiento de Red</span>
-            <span class="en">OSINT &amp; Network Discovery</span>
-        </div>
-        <div class="panel-body">
-            <div class="osint-grid">
-                <!-- Ping Sweep -->
-                <div class="osint-panel-inner">
-                    <div class="osint-panel-header">
-                        <span class="dot" style="background:#00ff88"></span>
-                        <span class="es">Ping Sweep (CIDR)</span>
-                        <span class="en">Ping Sweep (CIDR)</span>
-                    </div>
-                    <div class="osint-panel-body">
-                        <div class="form-group">
-                            <label><span class="es">Rango de red CIDR</span><span class="en">CIDR Network Range</span></label>
-                            <input type="text" id="discover-cidr" placeholder="192.168.1.0/24" autocomplete="off" spellcheck="false"/>
-                        </div>
-                        <button class="btn-scan" id="btn-discover" style="padding:10px">
-                            <span class="es">Descubrir Hosts</span>
-                            <span class="en">Discover Hosts</span>
-                        </button>
-                        <div id="discover-output" class="osint-output"></div>
-                    </div>
-                </div>
-                <!-- Subdomain Enumeration -->
-                <div class="osint-panel-inner">
-                    <div class="osint-panel-header">
-                        <span class="dot" style="background:#8899ff"></span>
-                        <span class="es">Enumeración de Subdominios</span>
-                        <span class="en">Subdomain Enumeration</span>
-                    </div>
-                    <div class="osint-panel-body">
-                        <div class="form-group">
-                            <label><span class="es">Dominio objetivo</span><span class="en">Target domain</span></label>
-                            <input type="text" id="subdomain-input" placeholder="example.com" autocomplete="off" spellcheck="false"/>
-                        </div>
-                        <button class="btn-scan" id="btn-subdomains" style="padding:10px">
-                            <span class="es">Buscar Subdominios</span>
-                            <span class="en">Find Subdomains</span>
-                        </button>
-                        <div id="subdomain-output" class="osint-output"></div>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -426,19 +202,19 @@
             <button class="audit-tab" data-pane="screenshot" style="display:none;">📷 Screenshot</button>
         </div>
         <div class="audit-pane active" id="pane-headers">
-            <div class="audit-loading"><span class="spinner"></span><span class="es">Auditando cabeceras HTTP...</span><span class="en">Auditing HTTP headers...</span></div>
+            <div class="no-results">[ _ ]</div>
         </div>
         <div class="audit-pane" id="pane-technologies">
-            <div class="audit-loading"><span class="spinner"></span><span class="es">Detectando tecnologías...</span><span class="en">Detecting technologies...</span></div>
+            <div class="no-results">[ _ ]</div>
         </div>
         <div class="audit-pane" id="pane-paths">
-            <div class="audit-loading"><span class="spinner"></span><span class="es">Escaneando rutas sensibles...</span><span class="en">Scanning sensitive paths...</span></div>
+            <div class="no-results">[ _ ]</div>
         </div>
         <div class="audit-pane" id="pane-ssl">
-            <div class="audit-loading"><span class="spinner"></span><span class="es">Analizando certificado SSL/TLS...</span><span class="en">Analyzing SSL/TLS certificate...</span></div>
+            <div class="no-results">[ _ ]</div>
         </div>
         <div class="audit-pane" id="pane-cve">
-            <div class="no-results" id="cve-initial-msg" style="padding:40px 24px">
+            <div class="no-results" style="padding:40px 24px">
                 [ 🐛 ]<br>
                 <span class="es">Ejecuta <strong style="color:#aaa">Fingerprinting</strong> primero para mejores resultados, luego lanza el análisis CVE.</span>
                 <span class="en">Run <strong style="color:#aaa">Fingerprinting</strong> first for better results, then launch CVE analysis.</span>
@@ -453,7 +229,7 @@
         </div>
     </div>
 
-    <!-- Historial -->
+    <!-- Historial reciente -->
     <div class="panel" id="history-panel" style="display:none;">
         <div class="panel-header">
             <span class="dot" style="background:#ffaa00;box-shadow:0 0 6px rgba(255,170,0,.4)"></span>
@@ -461,6 +237,66 @@
             <span class="en">Recent history</span>
         </div>
         <div id="history-list"></div>
+    </div>
+
+    <!-- ── OSINT & Descubrimiento (AL FONDO) ── -->
+    <div class="panel" style="margin-top:8px">
+        <div class="panel-header">
+            <span class="dot" style="background:#8866ff;box-shadow:0 0 6px rgba(136,102,255,.4)"></span>
+            <span class="es">OSINT &amp; Descubrimiento de Red</span>
+            <span class="en">OSINT &amp; Network Discovery</span>
+        </div>
+        <div class="panel-body">
+            <div class="osint-grid">
+
+                <!-- Ping Sweep -->
+                <div class="osint-panel-inner">
+                    <div class="osint-panel-header">
+                        <span class="dot" style="background:#00ff88"></span>
+                        <span>Ping Sweep (CIDR)</span>
+                    </div>
+                    <div class="osint-panel-body">
+                        <div class="osint-help">
+                            <span class="es">Introduce un rango de red en formato CIDR (ej: <strong>192.168.1.0/24</strong>) y detecta qué hosts están activos con su tiempo de respuesta. Haz clic en cualquier IP para escanearlo.</span>
+                            <span class="en">Enter a network range in CIDR format (e.g. <strong>192.168.1.0/24</strong>) to detect live hosts and their response times. Click any IP to scan it.</span>
+                        </div>
+                        <div class="form-group">
+                            <label><span class="es">Rango CIDR</span><span class="en">CIDR Range</span></label>
+                            <input type="text" id="discover-cidr" placeholder="192.168.1.0/24" autocomplete="off" spellcheck="false"/>
+                        </div>
+                        <button class="btn-scan" id="btn-discover" style="padding:10px">
+                            <span class="es">Descubrir Hosts</span>
+                            <span class="en">Discover Hosts</span>
+                        </button>
+                        <div id="discover-output" class="osint-output"></div>
+                    </div>
+                </div>
+
+                <!-- Subdomain Enumeration -->
+                <div class="osint-panel-inner">
+                    <div class="osint-panel-header">
+                        <span class="dot" style="background:#8899ff"></span>
+                        <span class="es">Enumeración de Subdominios</span>
+                        <span class="en">Subdomain Enumeration</span>
+                    </div>
+                    <div class="osint-panel-body">
+                        <div class="osint-help">
+                            <span class="es">Introduce un dominio (ej: <strong>google.com</strong>) y busca subdominios en registros públicos de certificados SSL (crt.sh). Muestra IP resuelta y validez del cert. Haz clic en → para escanearlo.</span>
+                            <span class="en">Enter a domain (e.g. <strong>google.com</strong>) and find subdomains from public SSL certificate logs (crt.sh). Shows resolved IP and cert validity. Click → to scan it directly.</span>
+                        </div>
+                        <div class="form-group">
+                            <label><span class="es">Dominio objetivo</span><span class="en">Target domain</span></label>
+                            <input type="text" id="subdomain-input" placeholder="example.com" autocomplete="off" spellcheck="false"/>
+                        </div>
+                        <button class="btn-scan" id="btn-subdomains" style="padding:10px">
+                            <span class="es">Buscar Subdominios</span>
+                            <span class="en">Find Subdomains</span>
+                        </button>
+                        <div id="subdomain-output" class="osint-output"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
 </main>
