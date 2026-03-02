@@ -1,26 +1,166 @@
-import json
-import re
+"""
+main.py
+───────
+LukitaPort v2 — FastAPI application entry point.
+
+Route handlers are intentionally thin:
+  1. Validate input (via helper functions).
+  2. Delegate to the service layer / module functions.
+  3. Return a typed JSON response.
+
+All business logic lives in scan_service.py and the dedicated module files.
+
+Lifespan — what happens at startup / shutdown
+──────────────────────────────────────────────
+Startup:
+  1. Configure structured JSON logging.
+  2. Try to start a shared Playwright + Chromium instance.
+     If playwright is not installed the server still starts; screenshots
+     fall back to the per-request launch strategy in scan_service.py.
+  3. Register the browser with scan_service.set_browser() so every
+     take_screenshot call reuses the single Chromium process.
+  4. Start a background task that evicts expired screenshot-cache entries
+     every 5 minutes.
+
+Shutdown:
+  1. Cancel the eviction task.
+  2. Close the shared Playwright browser and stop the playwright instance,
+     preventing orphan Chromium processes after Uvicorn stops.
+
+SSRF protection
+───────────────
+After every resolve_target() call, check whether the resolved IP is an
+internal/private address.  If so, return HTTP 403 Forbidden.
+
+The check is skipped when ``ALLOW_PRIVATE_IPS=true`` is set in the
+environment — useful for scanning internal lab networks.
+"""
+
+from __future__ import annotations
+
 import asyncio
-import shutil
-import sys
-import ipaddress
-from fastapi import FastAPI, Query, Request, BackgroundTasks, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse, Response
-from fastapi.staticfiles import StaticFiles
+import json
+import os
+from contextlib import asynccontextmanager
+from typing import Annotated, AsyncGenerator, Optional
+
+from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, Annotated
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
-import httpx
-
+from logging_config import configure_logging, get_logger
+from models import ExportRequest, ScreenshotCaptureResponse
+from cache import screenshot_cache
 from config import PORT_RISK
-from resolver import resolve_target
+from resolver import resolve_target, is_ssrf_blocked
 from scanner import scan_ports_stream, get_port_range, PROFILES
 from auditor import run_full_audit
 from ssl_analyzer import analyze_ssl_for_ports
-from cve_lookup import lookup_cves, lookup_cves_for_ports
+from cve_lookup import lookup_cves, lookup_cves_for_ports, get_cache_stats
+from scan_service import (
+    fetch_geoip,
+    ping_sweep,
+    enumerate_subdomains,
+    run_nmap,
+    nmap_timeout,
+    take_screenshot,
+    build_markdown_report,
+    set_browser,
+    clear_browser,
+)
 
-app = FastAPI(title="LukitaPort")
+import ipaddress
+import re as _re
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Lifespan  (startup + shutdown)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
+    # ── Startup ───────────────────────────────────────────────────────────────
+    configure_logging(os.getenv("LOG_LEVEL", "INFO"))
+    logger.info(
+        "lukitaport_starting",
+        allow_private_ips=os.getenv("ALLOW_PRIVATE_IPS", "false"),
+    )
+
+    # ── Playwright shared browser ─────────────────────────────────────────────
+    _pw = None
+    _browser_instance = None
+
+    try:
+        from playwright.async_api import async_playwright  # type: ignore[import]
+        _pw               = await async_playwright().start()
+        _browser_instance = await _pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        set_browser(_browser_instance)
+        logger.info("playwright_ready", browser="chromium")
+    except ImportError:
+        logger.warning(
+            "playwright_not_installed",
+            detail="Screenshots will fall back to per-request launch.",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "playwright_launch_failed",
+            error=str(exc),
+            detail="Screenshots will fall back to per-request launch.",
+        )
+
+    # ── Background screenshot-cache eviction ──────────────────────────────────
+    async def _evict_loop() -> None:
+        while True:
+            await asyncio.sleep(300)
+            removed = screenshot_cache.evict_expired()
+            if removed:
+                logger.info("screenshot_cache_evicted", removed=removed)
+
+    evict_task = asyncio.create_task(_evict_loop())
+
+    # ── Hand off to the application ───────────────────────────────────────────
+    yield
+
+    # ── Shutdown ─────────────────────────────────────────────────────────────
+    evict_task.cancel()
+
+    clear_browser()
+
+    if _browser_instance is not None:
+        try:
+            await _browser_instance.close()
+            logger.info("playwright_browser_closed")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("playwright_browser_close_error", error=str(exc))
+
+    if _pw is not None:
+        try:
+            await _pw.stop()
+            logger.info("playwright_stopped")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("playwright_stop_error", error=str(exc))
+
+    logger.info("lukitaport_shutdown")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FastAPI application
+# ──────────────────────────────────────────────────────────────────────────────
+
+logger = get_logger(__name__)
+
+app = FastAPI(
+    title="LukitaPort",
+    version="2.0.0",
+    description=(
+        "Async port scanner with real-time SSE streaming, HTTP security audit, "
+        "SSL/TLS analysis, CVE lookup, network discovery, and subdomain enumeration."
+    ),
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,153 +171,232 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
-_screenshots: dict[str, dict] = {}
 
-# ─── Input Validation ─────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Input validation helpers
+# ──────────────────────────────────────────────────────────────────────────────
 
-_HOSTNAME_RE = re.compile(
-    r'^(?!-)(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)'
-    r'(?:\.(?!-)(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?))*$'
+_HOSTNAME_RE     = _re.compile(
+    r"^(?!-)(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)"
+    r"(?:\.(?!-)(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)){0,126}$"
 )
+_DOMAIN_LABEL_RE = _re.compile(r"^[A-Za-z0-9\-]{1,63}$")
 
-_DOMAIN_LABEL_RE = re.compile(r'^[A-Za-z0-9\-]{1,63}$')
 
-
-def _validate_target(target: str) -> str:
-    t = target.strip()
-    if not t or len(t) > 253:
-        raise HTTPException(status_code=400, detail="Invalid target: empty or exceeds 253 characters")
-    try:
-        ipaddress.ip_address(t)
-        return t
-    except ValueError:
-        pass
-    if _HOSTNAME_RE.match(t) and "." in t:
-        return t
-    raise HTTPException(
-        status_code=400,
-        detail=f"Invalid target: '{t}' must be a valid IPv4, IPv6, or RFC 1123 hostname",
+def _json_response(data: dict, status_code: int = 200) -> Response:
+    return Response(
+        content=json.dumps(data),
+        status_code=status_code,
+        media_type="application/json",
     )
 
 
-def _validate_cidr(cidr: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+def _bad(msg: str, status_code: int = 400) -> Response:
+    return _json_response({"ok": False, "error": msg}, status_code)
+
+
+def _ssrf_error(ip: str) -> Response:
+    """
+    Return HTTP 403 when a resolved IP is in a private/internal range.
+
+    The body includes the offending IP so the client can show a helpful
+    message.  Blocked IPs are also logged (warning level) by resolver.py.
+    """
+    return _json_response(
+        {
+            "ok":    False,
+            "error": "ssrf_blocked",
+            "detail": (
+                f"Scanning internal addresses is not permitted (resolved: {ip}). "
+                "Set ALLOW_PRIVATE_IPS=true to enable scanning private networks."
+            ),
+        },
+        status_code=403,
+    )
+
+
+def _validate_target(target: str) -> tuple[Optional[str], Optional[Response]]:
+    t = target.strip()
+    if not t or len(t) > 253:
+        return None, _bad("Invalid target: empty or exceeds 253 characters.")
     try:
-        return ipaddress.ip_network(cidr.strip(), strict=False)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid CIDR: {e}")
+        ipaddress.ip_address(t)
+        return t, None
+    except ValueError:
+        pass
+    if _HOSTNAME_RE.match(t) and "." in t:
+        return t, None
+    return None, _bad(f"Invalid target: '{t}' is not a valid IPv4, IPv6, or RFC 1123 hostname.")
 
 
-def _validate_domain(domain: str) -> str:
+def _validate_cidr(
+    cidr: str,
+) -> tuple[Optional[ipaddress.IPv4Network | ipaddress.IPv6Network], Optional[Response]]:
+    try:
+        return ipaddress.ip_network(cidr.strip(), strict=False), None
+    except ValueError as exc:
+        return None, _bad(f"Invalid CIDR: {exc}")
+
+
+def _validate_domain(domain: str) -> tuple[Optional[str], Optional[Response]]:
     d = domain.strip().lstrip("*.").lower()
     if not d or len(d) > 253 or "." not in d:
-        raise HTTPException(status_code=400, detail="Invalid domain: must contain at least one dot")
+        return None, _bad("Invalid domain: must contain at least one dot.")
     labels = d.split(".")
     if not all(_DOMAIN_LABEL_RE.match(lbl) for lbl in labels):
-        raise HTTPException(status_code=400, detail=f"Invalid domain: '{d}' contains invalid characters")
-    return d
+        return None, _bad(f"Invalid domain: '{d}' contains invalid characters.")
+    return d, None
 
 
-def _validate_open_ports(ports_str: str) -> list[int]:
-    ports = []
-    for p in ports_str.split(","):
+def _validate_ports_str(ports: str) -> tuple[Optional[list[int]], Optional[Response]]:
+    result: list[int] = []
+    for p in ports.split(","):
         p = p.strip()
         if not p.isdigit():
-            raise HTTPException(status_code=400, detail=f"Invalid port value: '{p}'")
+            return None, _bad(f"Invalid port value: '{p}'")
         pint = int(p)
-        if not (1 <= pint <= 65535):
-            raise HTTPException(status_code=400, detail=f"Port {pint} is out of range (1–65535)")
-        ports.append(pint)
-    return ports
+        if not (1 <= pint <= 65_535):
+            return None, _bad(f"Port {pint} is out of range (1–65535).")
+        result.append(pint)
+    return result, None
 
 
-# ─── Config ───────────────────────────────────────────────────────────────────
+def _check_resolution(resolution: dict) -> Optional[Response]:
+    """
+    Check the result of ``resolve_target()``.
+
+    Returns an error Response (400 or 403) if:
+    • DNS resolution failed, or
+    • The resolved IP is an internal address and ALLOW_PRIVATE_IPS is false.
+
+    Returns None on success — the caller may proceed.
+    """
+    if not resolution["ip"]:
+        return _bad(f"Could not resolve target: {resolution['error']}")
+
+    if resolution["error"] == "ssrf_blocked":
+        return _ssrf_error(resolution["ip"])
+
+    # Extra guard: re-check the IP directly (defence in depth for any code
+    # path that calls resolve_target without the ssrf_blocked sentinel).
+    if is_ssrf_blocked(resolution["ip"]):
+        return _ssrf_error(resolution["ip"])
+
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Config / Root
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/config", include_in_schema=False)
-def get_config():
+def get_config() -> dict:
     return {"portRisk": {str(k): v for k, v in PORT_RISK.items()}}
 
 
-# ─── Root ─────────────────────────────────────────────────────────────────────
-
 @app.get("/", include_in_schema=False)
-def root():
+def root() -> FileResponse:
     return FileResponse("frontend/index.html")
 
 
-# ─── Resolve ─────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Resolve
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/resolve")
-async def resolve(target: str = Query(...)):
-    safe = _validate_target(target)
-    return resolve_target(safe)
+async def resolve(target: str = Query(...)) -> Response:
+    safe, err = _validate_target(target)
+    if err:
+        return err
+    resolution = resolve_target(safe)
+    # Expose ssrf_blocked as a 403 at this endpoint too, so the frontend
+    # can surface a clear error message before the user even starts a scan.
+    resolution_err = _check_resolution(resolution)
+    if resolution_err:
+        return resolution_err
+    return _json_response(resolution)
 
 
-# ─── GeoIP / ASN ─────────────────────────────────────────────────────────────
-
-async def _geoip(ip: str) -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                f"http://ip-api.com/json/{ip}",
-                params={"fields": "status,country,countryCode,regionName,city,isp,as,org,query"},
-            )
-            data = resp.json()
-            if data.get("status") == "success":
-                return {
-                    "country":      data.get("country", ""),
-                    "country_code": data.get("countryCode", ""),
-                    "region":       data.get("regionName", ""),
-                    "city":         data.get("city", ""),
-                    "isp":          data.get("isp", ""),
-                    "asn":          data.get("as", ""),
-                    "org":          data.get("org", ""),
-                }
-    except Exception:
-        pass
-    return {}
-
+# ──────────────────────────────────────────────────────────────────────────────
+# GeoIP
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/geoip")
-async def geoip(target: str = Query(...)):
-    safe = _validate_target(target)
+async def geoip(target: str = Query(...)) -> Response:
+    safe, err = _validate_target(target)
+    if err:
+        return err
     resolution = resolve_target(safe)
-    if resolution["error"] or not resolution["ip"]:
-        return {"error": f"Could not resolve: {resolution['error']}"}
-    geo = await _geoip(resolution["ip"])
-    return {"ip": resolution["ip"], **geo}
+    resolution_err = _check_resolution(resolution)
+    if resolution_err:
+        return resolution_err
+    geo = await fetch_geoip(resolution["ip"])
+    return _json_response({"ip": resolution["ip"], **geo})
 
 
-# ─── Scan ────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Scan  (SSE streaming)
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/scan")
 async def scan(
     request:    Request,
     target:     str   = Query(...),
-    mode:       str   = Query("quick",  regex="^(quick|full|custom)$"),
-    profile:    str   = Query("normal", regex="^(stealth|normal|aggressive)$"),
-    port_start: int   = Query(1,    ge=1, le=65535),
-    port_end:   int   = Query(1024, ge=1, le=65535),
+    mode:       str   = Query("quick",  pattern=r"^(quick|full|custom)$"),
+    profile:    str   = Query("normal", pattern=r"^(stealth|normal|aggressive)$"),
+    port_start: int   = Query(1,    ge=1, le=65_535),
+    port_end:   int   = Query(1024, ge=1, le=65_535),
     timeout:    float = Query(1.0,  ge=0.1, le=5.0),
-):
-    safe = _validate_target(target)
+) -> StreamingResponse:
+
+    async def _error_stream(msg: str, status: int = 400) -> AsyncGenerator[str, None]:
+        yield f"data: {json.dumps({'error': msg, 'status': status})}\n\n"
+
+    safe, err = _validate_target(target)
+    if err:
+        return StreamingResponse(
+            _error_stream("Invalid target."),
+            media_type="text/event-stream",
+        )
+
     resolution = resolve_target(safe)
 
-    if resolution["error"] or not resolution["ip"]:
-        err_msg = resolution["error"]
-        async def error_stream():
-            yield 'data: ' + json.dumps({'error': f'Could not resolve target: {err_msg}'}) + '\n\n'
-
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
+    # SSRF check — propagate as an SSE error event so the frontend
+    # receives a structured message even over the event stream.
+    if not resolution["ip"]:
+        return StreamingResponse(
+            _error_stream(f"Could not resolve target: {resolution['error']}"),
+            media_type="text/event-stream",
+        )
+    if resolution["error"] == "ssrf_blocked" or is_ssrf_blocked(resolution["ip"]):
+        return StreamingResponse(
+            _error_stream(
+                f"Scanning internal addresses is not permitted "
+                f"(resolved: {resolution['ip']}). "
+                "Set ALLOW_PRIVATE_IPS=true to scan private networks.",
+                status=403,
+            ),
+            media_type="text/event-stream",
+        )
 
     ip    = resolution["ip"]
     ports = get_port_range(mode, port_start, port_end)
     prof  = PROFILES.get(profile, PROFILES["normal"])
 
-    geo_task = asyncio.create_task(_geoip(ip))
+    logger.info(
+        "scan_start",
+        target=safe,
+        ip=ip,
+        mode=mode,
+        profile=profile,
+        port_count=len(ports),
+    )
 
-    async def event_stream():
+    async def event_stream() -> AsyncGenerator[str, None]:
         try:
-            geo = await asyncio.wait_for(geo_task, timeout=3.0)
+            geo = await asyncio.wait_for(
+                asyncio.create_task(fetch_geoip(ip)), timeout=3.0
+            )
         except Exception:
             geo = {}
 
@@ -195,13 +414,13 @@ async def scan(
         yield f"data: {json.dumps(meta)}\n\n"
 
         open_count = 0
-
         async for result in scan_ports_stream(
             ip, ports, timeout,
             max_concurrent=prof["max_concurrent"],
             inter_delay=prof["inter_delay"],
         ):
             if await request.is_disconnected():
+                logger.info("scan_cancelled", ip=ip)
                 yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
                 return
 
@@ -210,299 +429,92 @@ async def scan(
             result["type"] = "port"
             yield f"data: {json.dumps(result)}\n\n"
 
-        yield f"data: {json.dumps({'type': 'done', 'open_ports': open_count, 'total_scanned': len(ports)})}\n\n"
+        logger.info("scan_done", ip=ip, open=open_count, total=len(ports))
+        yield (
+            f"data: {json.dumps({'type': 'done', 'open_ports': open_count, 'total_scanned': len(ports)})}\n\n"
+        )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-# ─── Network Discovery ────────────────────────────────────────────────────────
-
-_NMAP_TIMEOUT_BASE       = 20
-_NMAP_TIMEOUT_PER_PORT   = 4
+# ──────────────────────────────────────────────────────────────────────────────
+# Network Discovery
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/discover")
 async def discover(
     cidr:      str = Query(..., description="CIDR range, e.g. 192.168.1.0/24"),
     max_hosts: int = Query(254, ge=1, le=1024),
-):
-    network = _validate_cidr(cidr)
-    hosts   = list(network.hosts())[:max_hosts]
+) -> Response:
+    network, err = _validate_cidr(cidr)
+    if err:
+        return err
+    hosts = list(network.hosts())[:max_hosts]
     if not hosts:
-        return {"error": "No hosts in range", "alive": []}
+        return _json_response({"error": "No hosts in range", "alive": []})
 
-    is_windows = sys.platform == "win32"
-
-    async def ping_host(ip_obj) -> Optional[dict]:
-        ip_str = str(ip_obj)
-        # ip_str is guaranteed to be a valid IP from ipaddress library
-        args = (
-            ["ping", "-n", "1", "-w", "800", ip_str]
-            if is_windows
-            else ["ping", "-c", "1", "-W", "1", ip_str]
-        )
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3.0)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                return None
-
-            if proc.returncode == 0:
-                output = stdout.decode("utf-8", errors="replace")
-                rtt = None
-                for pattern in (r"time[<=](\d+\.?\d*)\s*ms", r"Average\s*=\s*(\d+)ms"):
-                    m = re.search(pattern, output, re.IGNORECASE)
-                    if m:
-                        rtt = float(m.group(1))
-                        break
-                return {"ip": ip_str, "alive": True, "rtt_ms": rtt}
-        except Exception:
-            pass
-        return None
-
-    sem = asyncio.Semaphore(64)
-
-    async def ping_with_sem(ip_obj):
-        async with sem:
-            return await ping_host(ip_obj)
-
-    tasks   = [asyncio.create_task(ping_with_sem(h)) for h in hosts]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    alive   = [r for r in results if isinstance(r, dict) and r and r.get("alive")]
-    alive.sort(key=lambda x: list(map(int, x["ip"].split("."))))
-
-    return {
+    alive = await ping_sweep(hosts)
+    return _json_response({
         "cidr":        cidr,
         "total_hosts": len(hosts),
         "alive_count": len(alive),
         "alive":       alive,
-    }
+    })
 
 
-# ─── Subdomains ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Subdomain Enumeration
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/subdomains")
-async def subdomains(domain: str = Query(...)):
-    import socket
-    safe = _validate_domain(domain)
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                "https://crt.sh/",
-                params={"q": f"%.{safe}", "output": "json"},
-                headers={"Accept": "application/json"},
-            )
-            if resp.status_code != 200:
-                return {"error": f"crt.sh returned {resp.status_code}", "subdomains": []}
-            data = resp.json()
-    except Exception as e:
-        return {"error": f"crt.sh unreachable: {e}", "subdomains": []}
-
-    seen: set[str] = set()
-    results = []
-
-    for entry in data:
-        for name in entry.get("name_value", "").splitlines():
-            name = name.strip().lstrip("*.").lower()
-            if not name or name in seen:
-                continue
-            if not (name == safe or name.endswith(f".{safe}")):
-                continue
-            if "*" in name:
-                continue
-            seen.add(name)
-            results.append({
-                "subdomain":  name,
-                "issuer":     entry.get("issuer_name", ""),
-                "not_before": entry.get("not_before", "")[:10],
-                "not_after":  entry.get("not_after", "")[:10],
-            })
-
-    results.sort(key=lambda x: x["subdomain"])
-
-    async def resolve_sub(item: dict) -> dict:
-        loop = asyncio.get_event_loop()
-        try:
-            ip = await loop.run_in_executor(None, socket.gethostbyname, item["subdomain"])
-            return {**item, "ip": ip, "resolves": True}
-        except Exception:
-            return {**item, "ip": None, "resolves": False}
-
-    top  = results[:50]
-    rest = results[50:]
-    resolved_top = await asyncio.gather(*[asyncio.create_task(resolve_sub(r)) for r in top], return_exceptions=True)
-    resolved_top = [r for r in resolved_top if isinstance(r, dict)]
-    for item in rest:
-        resolved_top.append({**item, "ip": None, "resolves": None})
-
-    return {
-        "domain":     safe,
-        "total":      len(results),
-        "subdomains": resolved_top,
-    }
+async def subdomains(domain: str = Query(...)) -> Response:
+    safe, err = _validate_domain(domain)
+    if err:
+        return err
+    result = await enumerate_subdomains(safe)
+    return _json_response(result)
 
 
-# ─── Nmap helpers ─────────────────────────────────────────────────────────────
-
-def _find_nmap() -> Optional[str]:
-    path = shutil.which("nmap")
-    if path:
-        return path
-    if sys.platform == "win32":
-        import os
-        for candidate in (
-            r"C:\Program Files (x86)\Nmap\nmap.exe",
-            r"C:\Program Files\Nmap\nmap.exe",
-            r"C:\nmap\nmap.exe",
-        ):
-            if os.path.isfile(candidate):
-                return candidate
-    return None
-
-
-async def _run_nmap_async(ip: str, ports_str: str, timeout_seconds: int) -> dict:
-    nmap_bin = _find_nmap()
-    if not nmap_bin:
-        return {"_error": "nmap_not_installed"}
-
-    args = [
-        nmap_bin,
-        "-sV", "--version-intensity", "5",
-        "-T4",
-        "--host-timeout", f"{timeout_seconds}s",
-        "-p", ports_str,
-        "-oX", "-",
-        ip,
-    ]
-
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds + 10)
-    except asyncio.TimeoutError:
-        try:
-            proc.terminate()
-            await asyncio.sleep(1)
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        return {"_error": "nmap_timeout"}
-    except asyncio.CancelledError:
-        try:
-            proc.terminate()
-            await asyncio.sleep(0.5)
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        raise
-
-    if proc.returncode != 0 and not stdout:
-        err = stderr.decode("utf-8", errors="replace")[:200]
-        if "nmap" in err.lower() or "command not found" in err.lower():
-            return {"_error": "nmap_not_installed"}
-        return {"_error": err or "nmap error"}
-
-    return _parse_nmap_xml(stdout.decode("utf-8", errors="replace"))
-
-
-def _parse_nmap_xml(xml: str) -> dict:
-    import xml.etree.ElementTree as ET
-    results = {}
-    try:
-        root = ET.fromstring(xml)
-        for host in root.findall("host"):
-            for ports_el in host.findall("ports"):
-                for port_el in ports_el.findall("port"):
-                    portid    = int(port_el.get("portid", 0))
-                    state_el  = port_el.find("state")
-                    if state_el is None or state_el.get("state") != "open":
-                        continue
-                    svc = port_el.find("service") or {}
-                    results[portid] = {
-                        "product":   svc.get("product", "")   if hasattr(svc, "get") else "",
-                        "version":   svc.get("version", "")   if hasattr(svc, "get") else "",
-                        "extrainfo": svc.get("extrainfo", "") if hasattr(svc, "get") else "",
-                        "cpe":       (svc.find("cpe").text if svc.find("cpe") is not None else "") if hasattr(svc, "find") else "",
-                        "name":      svc.get("name", "")      if hasattr(svc, "get") else "",
-                    }
-    except Exception as e:
-        results["_error"] = f"xml_parse_error: {e}"
-    return results
-
-
-# ─── Fingerprint ─────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# Fingerprint (nmap -sV)
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/fingerprint")
 async def fingerprint(
-    request: Request,
+    request: Request,  # reserved for future per-request cancellation
     target:  str = Query(...),
     ports:   str = Query(...),
-):
-    safe       = _validate_target(target)
-    resolution = resolve_target(safe)
-    if resolution["error"] or not resolution["ip"]:
-        return {"error": f"Could not resolve: {resolution['error']}", "results": {}}
+) -> Response:
+    safe, err = _validate_target(target)
+    if err:
+        return err
+    port_list, err2 = _validate_ports_str(ports)
+    if err2:
+        return err2
 
-    port_list = _validate_open_ports(ports)
-    if not port_list:
-        return {"error": "No valid ports provided", "results": {}}
+    resolution = resolve_target(safe)
+    resolution_err = _check_resolution(resolution)
+    if resolution_err:
+        return resolution_err
 
     ports_str   = ",".join(str(p) for p in port_list)
-    timeout_sec = _NMAP_TIMEOUT_BASE + _NMAP_TIMEOUT_PER_PORT * len(port_list)
+    timeout_sec = nmap_timeout(len(port_list))
+    results     = await run_nmap(resolution["ip"], ports_str, timeout_sec)
 
-    results = await _run_nmap_async(resolution["ip"], ports_str, timeout_sec)
-    return {
+    return _json_response({
         "ip":          resolution["ip"],
         "timeout_sec": timeout_sec,
         "results":     results,
-    }
+    })
 
 
-# ─── Screenshot ──────────────────────────────────────────────────────────────
-
-async def _take_screenshot_bg(target: str, port: int):
-    import time
-    scheme = "https" if port in (443, 8443) else "http"
-    url    = f"{scheme}://{target}:{port}" if port not in (80, 443) else f"{scheme}://{target}"
-    try:
-        from playwright.async_api import async_playwright
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
-            page = await browser.new_page(
-                viewport={"width": 1280, "height": 800},
-                ignore_https_errors=True,
-            )
-            try:
-                await asyncio.wait_for(page.goto(url, wait_until="domcontentloaded"), timeout=8.0)
-                png = await page.screenshot(full_page=False)
-                _screenshots[target] = {"png": png, "url": url, "ts": time.time()}
-            except Exception:
-                pass
-            finally:
-                await browser.close()
-    except (ImportError, Exception):
-        pass
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Screenshot
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/screenshot")
-async def get_screenshot(target: str = Query(...)):
-    data = _screenshots.get(target)
+async def get_screenshot(target: str = Query(...)) -> Response:
+    data = screenshot_cache.get(target)
     if not data:
         return Response(status_code=204)
     return Response(
@@ -516,219 +528,141 @@ async def get_screenshot(target: str = Query(...)):
 async def capture_screenshot(
     background_tasks: BackgroundTasks,
     target: str = Query(...),
-    port:   int = Query(80),
-):
-    safe       = _validate_target(target)
+    port:   int = Query(80, ge=1, le=65_535),
+) -> Response:
+    safe, err = _validate_target(target)
+    if err:
+        return err
+
     resolution = resolve_target(safe)
-    if resolution["error"] or not resolution["ip"]:
-        return {"error": f"Could not resolve: {resolution['error']}"}
+    resolution_err = _check_resolution(resolution)
+    if resolution_err:
+        return resolution_err
+
     hostname = resolution["hostname"] or target
-    background_tasks.add_task(_take_screenshot_bg, hostname, port)
-    return {"status": "capturing", "target": hostname, "port": port}
+    background_tasks.add_task(take_screenshot, hostname, port)
+
+    payload = ScreenshotCaptureResponse(status="capturing", target=hostname, port=port)
+    return _json_response(payload.model_dump())
 
 
-# ─── Audit ───────────────────────────────────────────────────────────────────
+@app.get("/api/screenshot/cache-stats", include_in_schema=False)
+async def screenshot_cache_stats() -> Response:
+    return _json_response(screenshot_cache.stats())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Audit
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/audit")
 async def audit(
     target:     str = Query(...),
     open_ports: str = Query("80,443"),
-):
-    safe       = _validate_target(target)
+) -> Response:
+    safe, err = _validate_target(target)
+    if err:
+        return err
+    port_list, err2 = _validate_ports_str(open_ports)
+    if err2:
+        return err2
+
     resolution = resolve_target(safe)
-    if resolution["error"] or not resolution["ip"]:
-        return {"error": f"Could not resolve: {resolution['error']}"}
+    resolution_err = _check_resolution(resolution)
+    if resolution_err:
+        return resolution_err
 
-    ports    = _validate_open_ports(open_ports)
     hostname = resolution["hostname"] or target
-    result   = await run_full_audit(hostname, ports)
-    return {"target": target, "ip": resolution["ip"], **result}
+    result   = await run_full_audit(hostname, port_list)
+    return _json_response({"target": target, "ip": resolution["ip"], **result})
 
 
-# ─── SSL ─────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# SSL Analysis
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/ssl")
 async def ssl_analysis(
     target:     str   = Query(...),
     open_ports: str   = Query("443"),
     timeout:    float = Query(8.0, ge=1.0, le=30.0),
-):
-    safe       = _validate_target(target)
-    resolution = resolve_target(safe)
-    if resolution["error"] or not resolution["ip"]:
-        return {"error": f"Could not resolve: {resolution['error']}"}
+) -> Response:
+    safe, err = _validate_target(target)
+    if err:
+        return err
+    port_list, err2 = _validate_ports_str(open_ports)
+    if err2:
+        return err2
 
-    ports    = _validate_open_ports(open_ports)
+    resolution = resolve_target(safe)
+    resolution_err = _check_resolution(resolution)
+    if resolution_err:
+        return resolution_err
+
     hostname = resolution["hostname"] or target
     loop     = asyncio.get_event_loop()
-    result   = await loop.run_in_executor(None, analyze_ssl_for_ports, hostname, ports, timeout)
-    return {"target": target, "ip": resolution["ip"], **result}
+    result   = await loop.run_in_executor(
+        None, analyze_ssl_for_ports, hostname, port_list, timeout
+    )
+    return _json_response({"target": target, "ip": resolution["ip"], **result})
 
 
-# ─── CVE ─────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# CVE lookup
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/cve")
 async def cve_lookup_endpoint(
     service:     str = Query(...),
     version:     str = Query(""),
     max_results: int = Query(5, ge=1, le=10),
-):
-    return await lookup_cves(service, version, max_results)
+) -> Response:
+    result = await lookup_cves(service, version, max_results)
+    return _json_response(result)
 
 
 @app.post("/api/cve/batch")
-async def cve_batch(versions: dict):
+async def cve_batch(versions: dict) -> Response:
     results = await lookup_cves_for_ports(versions)
-    return {"results": results}
+    return _json_response({"results": results})
 
 
 @app.get("/api/cve/cache-stats", include_in_schema=False)
-async def cve_cache_stats():
-    from cve_lookup import get_cache_stats
-    return get_cache_stats()
+async def cve_cache_stats() -> Response:
+    return _json_response(get_cache_stats())
 
 
-# ─── Markdown Export ─────────────────────────────────────────────────────────
-
-class ScanData(BaseModel):
-    meta:    dict
-    results: list
-    summary: dict
-
-
-class ExportRequest(BaseModel):
-    scan:              ScanData
-    audit:             Optional[dict] = None
-    screenshot_target: Optional[str]  = None
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Markdown export
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/export/md")
-async def export_markdown(payload: ExportRequest):
-    from datetime import datetime
-
-    meta    = payload.scan.meta
-    results = payload.scan.results
-    summary = payload.scan.summary
-    audit   = payload.audit
-    ts      = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    target_info = meta.get("target", {}) or {}
-
-    lines = []
-    lines.append("# LukitaPort — Port Scan Report")
-    lines.append("")
-    lines.append(f"> Generated: {ts}  ")
-    lines.append(f"> **Target:** `{target_info.get('input', '—')}`  ")
-    lines.append(f"> **IP:** `{target_info.get('ip', '—')}`  ")
-    if target_info.get("hostname"):
-        lines.append(f"> **Hostname:** `{target_info['hostname']}`  ")
-    lines.append(f"> **Mode:** {target_info.get('mode', '—')}  ")
-    lines.append(f"> **Profile:** {target_info.get('profile', 'normal')}  ")
-
-    geo = target_info.get("geo") or {}
-    if geo:
-        lines.append(f"> **Location:** {geo.get('city', '')} {geo.get('country', '')} · {geo.get('isp', '')} · {geo.get('asn', '')}  ")
-    lines.append("> **For educational use only.**")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-    lines.append("## Summary")
-    lines.append("")
-    lines.append("| Open | Closed | Filtered | Total Scanned |")
-    lines.append("|------|--------|----------|---------------|")
-    lines.append(f"| {summary.get('open', 0)} | {summary.get('closed', 0)} | {summary.get('filtered', 0)} | {summary.get('total', 0)} |")
-    lines.append("")
-
-    open_ports = [r for r in results if r.get("state") == "open"]
-    if open_ports:
-        lines.append("## Open Ports")
-        lines.append("")
-        lines.append("| Port | Service | Risk | Response (ms) | Version / Banner |")
-        lines.append("|------|---------|------|---------------|------------------|")
-        for r in open_ports:
-            port    = r.get("port", "")
-            service = r.get("service", "")
-            risk    = PORT_RISK.get(port, "info").upper()
-            resp    = r.get("response_time_ms", "—")
-            version = r.get("version") or r.get("banner") or ""
-            lines.append(f"| {port} | {service} | {risk} | {resp} | {str(version)[:60]} |")
-        lines.append("")
-
-    high_n = sum(1 for r in open_ports if PORT_RISK.get(r.get("port"), "info") == "high")
-    med_n  = sum(1 for r in open_ports if PORT_RISK.get(r.get("port"), "info") == "medium")
-    if high_n or med_n:
-        lines.append("## Risk Assessment")
-        lines.append("")
-        if high_n:
-            lines.append(f"- 🔴 **{high_n} high-risk port(s)** — FTP, Telnet, RDP, exposed databases…")
-        if med_n:
-            lines.append(f"- 🟡 **{med_n} medium-risk port(s)** — SSH, DNS, IMAP, alternative proxies")
-        lines.append("")
-
-    lines.append("## All Results")
-    lines.append("")
-    lines.append("| Port | State | Service | Risk | Response (ms) |")
-    lines.append("|------|-------|---------|------|---------------|")
-    for r in results:
-        port  = r.get("port", "")
-        state = r.get("state", "")
-        svc   = r.get("service", "")
-        risk  = PORT_RISK.get(port, "info").upper() if state == "open" else "—"
-        resp  = r.get("response_time_ms", "—")
-        icon  = "🟢" if state == "open" else "🟡" if state == "filtered" else "🔴"
-        lines.append(f"| {port} | {icon} {state.capitalize()} | {svc} | {risk} | {resp} |")
-    lines.append("")
-
-    if audit:
-        lines.append("---")
-        lines.append("")
-        lines.append("## Advanced Audit")
-        lines.append("")
-        hd = audit.get("headers")
-        if hd and not hd.get("error"):
-            lines.append(f"### HTTP Security Headers — Grade: {hd.get('grade','?')} ({hd.get('score',0)}/100)")
-            lines.append("")
-            for h in hd.get("missing", []):
-                lines.append(f"- `{h['header']}` (**{h['severity'].upper()}**) — {h.get('description_en','')}")
-            lines.append("")
-        td = audit.get("technologies")
-        if td and not td.get("error") and td.get("technologies"):
-            lines.append(f"### Detected Technologies ({td['count']})")
-            lines.append("")
-            for tech in td["technologies"]:
-                lines.append(f"- {tech['icon']} **{tech['name']}** ({tech['category']})")
-            lines.append("")
-        pd = audit.get("paths")
-        if pd and pd.get("found"):
-            lines.append(f"### Sensitive Paths ({pd['total_found']} found)")
-            lines.append("")
-            lines.append("| Path | Label | Severity | Status |")
-            lines.append("|------|-------|----------|--------|")
-            for f in pd["found"]:
-                accessible = "✅ Accessible" if f["accessible"] else f"⚠️ {f['status_code']}"
-                lines.append(f"| `{f['path']}` | {f['label']} | **{f['severity'].upper()}** | {accessible} |")
-            lines.append("")
-
-    lines.append("---")
-    lines.append("")
-    lines.append("*LukitaPort · jaimefg1888 · For educational use only*")
-
+async def export_markdown(payload: ExportRequest) -> Response:
+    md = build_markdown_report(
+        meta=payload.scan.meta,
+        results=payload.scan.results,
+        summary=payload.scan.summary,
+        audit=payload.audit,
+    )
     return Response(
-        content="\n".join(lines),
+        content=md,
         media_type="text/markdown",
         headers={"Content-Disposition": "attachment; filename=lukitaport_report.md"},
     )
 
 
-# ─── PDF Export ───────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+# PDF export
+# ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/export/pdf")
-async def export_pdf(payload: ExportRequest):
+async def export_pdf(payload: ExportRequest) -> Response:
     try:
-        from pdf_generator import generate_pdf
+        from pdf_generator import generate_pdf  # type: ignore[import]
 
         screenshot_png: Optional[bytes] = None
         if payload.screenshot_target:
-            sc = _screenshots.get(payload.screenshot_target)
+            sc = screenshot_cache.get(payload.screenshot_target)
             if sc:
                 screenshot_png = sc.get("png")
 
@@ -750,14 +684,31 @@ async def export_pdf(payload: ExportRequest):
             headers={"Content-Disposition": "attachment; filename=lukitaport_report.pdf"},
         )
     except ImportError:
-        return Response(
-            content=json.dumps({"error": "reportlab not installed."}),
-            media_type="application/json",
-            status_code=500,
-        )
-    except Exception as e:
-        return Response(
-            content=json.dumps({"error": str(e)}),
-            media_type="application/json",
-            status_code=500,
-        )
+        return _json_response({"error": "reportlab not installed."}, 500)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("pdf_export_error", error=str(exc))
+        return _json_response({"error": str(exc)}, 500)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Admin / dev helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/admin/reload-signatures", include_in_schema=False)
+async def reload_tech_signatures() -> Response:
+    """Hot-reload technology detection signatures from tech_signatures.json."""
+    from auditor import reload_signatures
+    count = reload_signatures()
+    return _json_response({"ok": True, "signatures_loaded": count})
+
+
+@app.get("/api/admin/status", include_in_schema=False)
+async def server_status() -> Response:
+    """Health / status endpoint for monitoring."""
+    from scan_service import _browser as pw_browser
+    return _json_response({
+        "ok":                 True,
+        "playwright_ready":   pw_browser is not None,
+        "screenshot_cache":   screenshot_cache.stats(),
+        "allow_private_ips":  os.getenv("ALLOW_PRIVATE_IPS", "false"),
+    })
